@@ -151,6 +151,11 @@ curl -X POST "[PASTE-YOUR-DEPLOYED-CLOUD-RUN-URL-HERE]/analyze" -H "Content-Type
 ```
 
 ---
+## 🚀 Deployment
+
+LexiGuard backend is deployed on [Google Cloud Run](https://lexiguard-backend-798526808813.asia-south1.run.app), ensuring scalable and secure serverless hosting.
+
+Frontend is hosted on [Vercel](https://lexiguard-frontend-66oa228c3-krisha-gandhis-projects.vercel.app/) for fast and responsive access.
 
 ## 📌 Project Info
 
