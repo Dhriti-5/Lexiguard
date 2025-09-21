@@ -36,5 +36,5 @@ For **in-depth setup, features, and technical details**, please check the indivi
 ## 👩‍💻 Team  
 
 - Dhriti Gandhi  
-- Krisha  
-- Kavya  
+- Krisha Gandhi
+- Kavya Patel
