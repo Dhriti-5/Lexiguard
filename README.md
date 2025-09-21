@@ -28,7 +28,7 @@ For **in-depth setup, features, and technical details**, please check the indivi
 
 ## 🚀 Live Deployments  
 
-- **Frontend App:** 👉 [LexiGuard (Vercel)](https://lexiguard-frontend-9eiz1vrr4-krisha-gandhis-projects.vercel.app/results)  
+- **Frontend App:** 👉 [LexiGuard (Vercel)](https://lexiguard-frontend-9eiz1vrr4-krisha-gandhis-projects.vercel.app)  
 - **Backend API:** 👉 [LexiGuard API (Google Cloud Run)](https://lexiguard-backend-798526808813.asia-south1.run.app)  
 
 ---
