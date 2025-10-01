@@ -10,6 +10,8 @@ import NegotiationAssistant from "../components/NegotiationAssistant";
 const KEYWORDS_REGEX = /\b(agreement|contract|clause|liability|termination|penalty|indemnity|renewal)\b/gi;
 const ACTIONABLE_REGEX = /\b(\d+\s*(days?|weeks?|months?|years?)|due by|deadline|penalty|fine|termination|payment of \$?\d+|effective date|must|shall|obligated|required)\b/gi;
 
+const backendURL = process.env.REACT_APP_BACKEND_URL;
+
 function highlightText(text) {
   if (!text || typeof text !== "string") return "";
   const parts = text.split(ACTIONABLE_REGEX);
@@ -62,13 +64,20 @@ export default function Results() {
       const fetchExtended = async () => {
         setLoadingAnalysis(true);
         try {
-          const response = await fetch("http://127.0.0.1:8000/analyze-extended", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ text: initialAnalysis.summary || initialAnalysis.text || "" }),
-          });
-          const data = await response.json();
-          setAnalysis(data);
+          const response = await fetch(`${backendURL}/analyze-extended`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ text: initialAnalysis.summary || initialAnalysis.text || "" }),
+        });
+
+        if (!response.ok) {
+          console.error("Failed to fetch extended analysis");
+          setLoadingAnalysis(false);
+          return;
+        }
+
+        const data = await response.json();
+        setAnalysis(data);
         } catch (error) {
           console.error("Error fetching extended analysis:", error);
         } finally {
@@ -79,34 +88,42 @@ export default function Results() {
     }
   }, [initialAnalysis]);
 
-  const handleSend = async () => {
-    if (!inputMessage.trim()) return;
-    const userMessage = inputMessage.trim();
-    setChatMessages((prev) => [...prev, { sender: "user", text: userMessage }]);
-    setInputMessage("");
-    setLoading(true);
+const handleSend = async () => {
+  if (!inputMessage.trim()) return;
 
-    try {
-      const response = await fetch("http://127.0.0.1:8000/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: userMessage,
-          document_text: analysis.summary || "",
-        }),
-      });
-      const data = await response.json();
-      const aiMessage = data.reply || "No answer available.";
-      setChatMessages((prev) => [...prev, { sender: "ai", text: aiMessage }]);
-    } catch (error) {
-      setChatMessages((prev) => [
-        ...prev,
-        { sender: "ai", text: "Error communicating with server." },
-      ]);
-    } finally {
-      setLoading(false);
+  const userMessage = inputMessage.trim();
+  setChatMessages(prev => [...prev, { sender: "user", text: userMessage }]);
+  setInputMessage("");
+  setLoading(true);
+
+  try {
+    const response = await fetch(`${backendURL}/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: userMessage,
+        document_text: analysis.summary || analysis.text || "",
+      }),
+    });
+
+    if (!response.ok) {
+      throw new Error(`Server responded with status ${response.status}`);
     }
-  };
+
+    const data = await response.json();
+    const aiMessage = data.reply || "No answer available.";
+    setChatMessages(prev => [...prev, { sender: "ai", text: aiMessage }]);
+  } catch (error) {
+    console.error("Chat error:", error);
+    setChatMessages(prev => [
+      ...prev,
+      { sender: "ai", text: "Error communicating with server." },
+    ]);
+  } finally {
+    setLoading(false);
+  }
+};
+
 
   if (!analysis) {
     return (
@@ -259,6 +276,34 @@ export default function Results() {
                 </Card>
               )
             )}
+
+<Card className="bg-[#064E3B]/90 backdrop-blur-md shadow-2xl border-none">
+  <CardHeader>
+    <CardTitle>Key Responsibilities</CardTitle>
+  </CardHeader>
+  <CardContent>
+    <div className="space-y-3">
+      {analysis.risks && analysis.risks.length > 0 ? (
+        analysis.risks.map((risk, idx) => (
+          <div key={idx} className="flex items-center space-x-2">
+            <CheckCircle className="flex-shrink-0 w-4 h-4 text-emerald-400" />
+            <span className="text-sm text-gray-200 leading-snug">
+              {risk.risk_explanation || "No responsibility specified."}
+            </span>
+          </div>
+        ))
+      ) : (
+        <div className="flex items-start space-x-2">
+          <CheckCircle className="w-4 h-4 text-emerald-400 mt-0.5" />
+          <span className="text-sm text-gray-200">
+            No specific responsibilities identified
+          </span>
+        </div>
+      )}
+    </div>
+  </CardContent>
+</Card>
+
 
             {/* Negotiation Assistant */}
             <Card className="bg-[#064E3B]/90 backdrop-blur-md shadow-2xl border-none">

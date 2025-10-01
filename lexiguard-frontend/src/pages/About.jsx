@@ -19,8 +19,8 @@ const teamMembers = [
     role: "B.Tech Pre-Final Year, Computer Science & Engineering",
     bio: "Student at The Maharaja Sayajirao University of Baroda",
     image: dhritiImg, // local image import",
-    linkedin: "https://www.linkedin.com/in/dhriti-gandhi",
-    github: "https://github.com/dhriti-gandhi",
+    linkedin: "http://www.linkedin.com/in/dhriti-gandhi-0758372b5",
+    github: "https://github.com/Dhriti-5",
   },
   {
     name: "Kavya Patel",
@@ -282,3 +282,4 @@ export default function AboutPage() {
     </div>
   );
 }
+//about.jsx

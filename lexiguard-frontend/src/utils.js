@@ -1,6 +1,6 @@
 // src/utils.js
 
-const BASE_URL = "http://127.0.0.1:8000"; // or your deployed Cloud Run URL
+const BASE_URL = process.env.REACT_APP_BACKEND_URL; // or your deployed Cloud Run URL
 
 export async function analyzeExtended(text) {
   const res = await fetch(`${BASE_URL}/analyze-extended`, {

@@ -23,16 +23,16 @@ app = FastAPI(
 # --- 3. ENABLE CORS ---
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],        # <- allows any frontend origin
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["*"],        # <- allows all HTTP methods (GET, POST, etc.)
+    allow_headers=["*"],        # <- allows all headers
 )
 
 # --- 4. CONFIGURE GOOGLE GEMINI ---
 API_KEY = os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
-    raise ValueError("GOOGLE_API_KEY not found. Please set it in your .env file.")
+    raise ValueError("GOOGLE_API_KEY not found. Set it in Vercel Environment Variables.")
 
 genai.configure(api_key=API_KEY)
 
@@ -233,6 +233,9 @@ async def analyze_file(
 
 @app.post("/chat")
 async def chat_with_document(request: ChatRequest):
+    if not request.message.strip() or not request.document_text.strip():
+        return {"reply": "Please provide a message and document text."}
+
     prompt = f"""
 You are LexiGuard, a helpful AI assistant. Answer the user's messages based only on the provided legal document.
 Maintain conversation context. Do not assume beyond the document.
@@ -251,6 +254,7 @@ Respond concisely and clearly for a non-lawyer.
     except Exception as e:
         answer = f"Error: {str(e)}"
     return {"reply": answer}
+
 
 # --- 9. NEW ROUTES ---
 @app.post("/draft-negotiation")
@@ -301,4 +305,5 @@ async def analyze_extended(request: ExtendedAnalysisRequest):
 # --- 10. ENTRY POINT ---
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="127.0.0.1", port=8000, reload=True)
+    port = int(os.environ.get("PORT", 8000))  # Vercel sets PORT automatically
+    uvicorn.run("main:app", host="0.0.0.0", port=port)
