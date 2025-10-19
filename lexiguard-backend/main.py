@@ -159,15 +159,23 @@ You MUST respond ONLY with a valid JSON object. The structure of the JSON object
 If you find no risks, you MUST return: {"risks": []}
 Do not add any text or formatting before or after the JSON object.
 """
-
 NEGOTIATION_PROMPT = """
-You are LexiGuard, an AI that helps users negotiate risky clauses politely.
-Draft a short, professional, and polite email asking to revise or clarify the following clause:
+You are LexiGuard, an AI that helps users politely negotiate risky contract clauses.
+Draft a professional and polite email body requesting to amend or clarify the following clause.
 
-Clause:
+Clause (PII may be redacted with placeholders like [PERSON_NAME]):
 {clause}
 
-Do not include placeholders like [Company]. Just write a natural, ready-to-send email body.
+
+Your task is to draft ONLY the email body. The email should:
+1. Start professionally (e.g., "Regarding the draft agreement received...").
+2. Clearly reference the clause in question (you can mention its content briefly).
+3. Explain the user's concern politely based on the clause's meaning.
+4. Suggest a discussion or a more balanced alternative.
+5. Use standard placeholders like `[Your Name]`, `[Your Contact Info]`, `[Recipient Name/Company Name]`, and `[Date]` where specific personal or logistical details would normally go. Do NOT try to invent names or details.
+6. End with a collaborative closing (e.g., "I look forward to discussing this further.").
+
+Generate ONLY the email body text.
 """
 
 DOCUMENT_EMAIL_PROMPT = """
@@ -405,6 +413,9 @@ async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
     else:
         raise HTTPException(status_code=400, detail="No file or text provided")
 
+    # Redact PII from document for chat (privacy protection)
+    redacted_document_text, _ = redact_text_with_dlp(document_text)
+    
     result = analyze_text_internal(document_text)
     
     # Return in format expected by frontend
@@ -413,7 +424,8 @@ async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
         "file_type": file.filename.split(".")[-1].upper() if file else "Text",
         "summary": result.get("summary", ""),
         "risks": result.get("risks", {}).get("risks", []),
-        "pii_redacted": result.get("pii_redacted", False)
+        "pii_redacted": result.get("pii_redacted", False),
+        "document_text": redacted_document_text  # Redacted text for chat (PII protected)
     }
     
     # Add privacy notice if PII was redacted
@@ -452,6 +464,9 @@ async def analyze_clauses(file: UploadFile = File(None), text: str = Form(None))
     else:
         raise HTTPException(status_code=400, detail="No file or text provided")
     
+    # Redact PII from document for chat (privacy protection)
+    redacted_document_text, _ = redact_text_with_dlp(document_text)
+    
     result = analyze_clauses_detailed_internal(document_text)
     
     # Return in format expected by frontend
@@ -460,7 +475,8 @@ async def analyze_clauses(file: UploadFile = File(None), text: str = Form(None))
         "file_type": file.filename.split(".")[-1].upper() if file else "Text",
         "total_risky_clauses": len(result.get("risks", [])),
         "clauses": result.get("risks", []),
-        "pii_redacted": result.get("pii_redacted", False)
+        "pii_redacted": result.get("pii_redacted", False),
+        "document_text": redacted_document_text  # Redacted text for chat (PII protected)
     }
     
     # Add privacy notice if PII was redacted
@@ -470,19 +486,24 @@ async def analyze_clauses(file: UploadFile = File(None), text: str = Form(None))
     return response
 
 @app.post("/negotiate-clause")
+@app.post("/draft-negotiation")
 async def negotiate_clause(request: NegotiationRequest):
-    prompt = NEGOTIATION_PROMPT.format(clause=request.clause)
+    """Generate negotiation email for a risky clause (using redacted text)"""
+    redacted_text, changed = redact_text_with_dlp(request.clause)
+    prompt = NEGOTIATION_PROMPT.format(clause=redacted_text)
     response = model.generate_content(prompt)
-    return {"email": response.text.strip()}
+    return {"negotiation_email": response.text.strip()}
 
 @app.post("/generate-email")
+@app.post("/draft-document-email")
 async def generate_email(request: DocumentEmailRequest):
+    """Generate comprehensive document review email"""
     prompt = DOCUMENT_EMAIL_PROMPT.format(
         document_summary=request.document_summary,
         risk_summary=request.risk_summary
     )
     response = model.generate_content(prompt)
-    return {"email": response.text.strip()}
+    return {"document_email": response.text.strip()}
 
 @app.post("/fairness-score")
 async def fairness_score(request: NegotiationRequest):
@@ -507,16 +528,21 @@ async def chat_with_document(request: ChatRequest):
         return {"reply": "Please provide a message and document text."}
 
     prompt = f"""
-You are LexiGuard, a helpful AI assistant. Answer the user's messages based only on the provided legal document.
-Maintain conversation context. Do not assume beyond the document.
+You are LexiGuard, a helpful AI assistant. Answer the user's questions based *only* on the provided legal document context below.
+This document has had Personal Identifiable Information (PII) like names and addresses replaced with placeholders (e.g., [PERSON_NAME], [STREET_ADDRESS]).
+Focus your answer on explaining the rules, obligations, terms, and the overall context defined in the document, even with the placeholders.
 
-Document:
-{request.document_text}
+Document Context (Redacted):
+'''
+{request.document_text} 
+'''
 
 User Message:
+'''
 {request.message}
+'''
 
-Respond concisely and clearly for a non-lawyer.
+Respond concisely and clearly for a non-lawyer. If the answer depends entirely on specific PII that has been redacted, state that the specific detail is unavailable due to redaction, but explain the general rule or context.
 """
     try:
         response = model.generate_content(prompt)

@@ -115,12 +115,8 @@ export default function Results() {
     setChatHistory((prev) => [...prev, { role: "user", content: userMessage }]);
 
     try {
-      let documentText = "";
-      if (isDetailedAnalysis) {
-        documentText = analysis.document_preview || "";
-      } else {
-        documentText = analysis.summary || "";
-      }
+      // Use redacted document text for chat (PII protected)
+      const documentText = analysis.document_text || "";
 
       const res = await fetch("http://localhost:8000/chat", {
         method: "POST",
