@@ -1,0 +1,18 @@
+EMPLOYMENT AGREEMENT
+
+This Agreement is made on January 20, 2025, between:
+- TechStart Inc. ("Employer")
+- Michael Johnson ("Employee")
+
+Position: Senior Software Engineer
+Salary: $120,000 per year
+Start Date: February 1, 2025
+Term: 2 years
+
+Benefits:
+- Health insurance
+- 401k matching (4%)
+- 25 days PTO
+
+Termination: Either party may terminate with 30 days written notice.
+Non-compete: 6 months after termination within 50 miles.

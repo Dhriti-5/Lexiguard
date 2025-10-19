@@ -2,13 +2,21 @@ import React, { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
-import { Upload as UploadIcon, FileText, Clock, Shield } from "lucide-react";
+import {
+  Upload as UploadIcon,
+  FileText,
+  Clock,
+  Shield,
+  AlertTriangle,
+  CheckCircle,
+} from "lucide-react";
 import { motion } from "framer-motion";
 
 export default function Upload() {
   const [file, setFile] = useState(null);
   const [textInput, setTextInput] = useState("");
   const [loading, setLoading] = useState(false);
+  const [analysisType, setAnalysisType] = useState("detailed"); // "standard" or "detailed"
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
 
@@ -25,7 +33,6 @@ export default function Upload() {
     setLoading(true);
 
     const formData = new FormData();
-
     if (file) {
       formData.append("file", file);
     } else {
@@ -33,22 +40,18 @@ export default function Upload() {
     }
 
     try {
-      const res = await fetch(`${process.env.REACT_APP_BACKEND_URL}/analyze-file`, {
-      method: "POST",
-      body: formData,
-    });
+      // Choose endpoint based on analysis type
+      const endpoint =
+        analysisType === "detailed"
+          ? "http://localhost:8000/analyze-clauses"
+          : "http://localhost:8000/analyze-file";
 
-    // Check if response is OK
-    if (!res.ok) {
-      const errorText = await res.text(); // Get error from backend
-      alert("Server error: " + errorText); // Show error to user
-      setLoading(false); // Stop loading spinner
-      return; // Exit function
-    }
+      const res = await fetch(endpoint, {
+        method: "POST",
+        body: formData,
+      });
 
-    // Proceed normally
-    const data = await res.json();
-
+      const data = await res.json();
       setLoading(false);
 
       if (data.error) {
@@ -56,7 +59,7 @@ export default function Upload() {
         return;
       }
 
-      navigate("/results", { state: { analysis: data } });
+      navigate("/results", { state: { analysis: data, analysisType } });
     } catch (error) {
       console.error(error);
       setLoading(false);
@@ -98,6 +101,81 @@ export default function Upload() {
             </CardTitle>
           </CardHeader>
           <CardContent className="p-10">
+            {/* Analysis Type Selector */}
+            <div className="mb-8">
+              <label className="block text-white text-lg font-semibold mb-4">
+                Choose Analysis Type:
+              </label>
+              <div className="grid md:grid-cols-2 gap-4">
+                {/* Standard Analysis Option */}
+                <div
+                  onClick={() => setAnalysisType("standard")}
+                  className={`cursor-pointer rounded-xl p-6 border-2 transition-all ${
+                    analysisType === "standard"
+                      ? "border-cyan-400 bg-cyan-900/30 shadow-lg shadow-cyan-500/50"
+                      : "border-gray-600 bg-gray-800/30 hover:border-gray-500"
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <FileText className="w-6 h-6 text-cyan-400 flex-shrink-0 mt-1" />
+                    <div>
+                      <h3 className="text-white font-bold text-lg mb-2">
+                        Standard Analysis
+                      </h3>
+                      <p className="text-gray-300 text-sm leading-relaxed">
+                        Quick summary with basic risk identification and
+                        suggestions
+                      </p>
+                      <div className="mt-3 flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-emerald-400" />
+                        <span className="text-xs text-emerald-400 font-semibold">
+                          ~15-20 seconds
+                        </span>
+                      </div>
+                    </div>
+                    {analysisType === "standard" && (
+                      <CheckCircle className="w-6 h-6 text-cyan-400 ml-auto" />
+                    )}
+                  </div>
+                </div>
+
+                {/* Detailed Clause Analysis Option */}
+                <div
+                  onClick={() => setAnalysisType("detailed")}
+                  className={`cursor-pointer rounded-xl p-6 border-2 transition-all ${
+                    analysisType === "detailed"
+                      ? "border-cyan-400 bg-cyan-900/30 shadow-lg shadow-cyan-500/50"
+                      : "border-gray-600 bg-gray-800/30 hover:border-gray-500"
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <AlertTriangle className="w-6 h-6 text-yellow-400 flex-shrink-0 mt-1" />
+                    <div>
+                      <h3 className="text-white font-bold text-lg mb-2 flex items-center gap-2">
+                        Detailed Clause Analysis
+                        <span className="text-xs bg-yellow-500 text-black px-2 py-0.5 rounded-full font-bold">
+                          NEW
+                        </span>
+                      </h3>
+                      <p className="text-gray-300 text-sm leading-relaxed">
+                        Deep dive into each risky clause with explanations,
+                        impact, and recommendations
+                      </p>
+                      <div className="mt-3 flex items-center gap-2">
+                        <Clock className="w-4 h-4 text-emerald-400" />
+                        <span className="text-xs text-emerald-400 font-semibold">
+                          ~20-30 seconds
+                        </span>
+                      </div>
+                    </div>
+                    {analysisType === "detailed" && (
+                      <CheckCircle className="w-6 h-6 text-cyan-400 ml-auto" />
+                    )}
+                  </div>
+                </div>
+              </div>
+            </div>
+
             {/* Text Input */}
             <textarea
               value={textInput}
@@ -109,7 +187,7 @@ export default function Upload() {
 
             {/* File Upload */}
             <div
-              className="border-2 border-dashed border-cyan-400/50 rounded-xl p-12 text-center cursor-pointer mb-6"
+              className="border-2 border-dashed border-cyan-400/50 rounded-xl p-12 text-center cursor-pointer mb-6 hover:border-cyan-400 transition-colors"
               onClick={() => fileInputRef.current.click()}
             >
               <UploadIcon className="w-16 h-16 text-cyan-400 mx-auto mb-4 animate-pulse" />
@@ -124,20 +202,54 @@ export default function Upload() {
                 ref={fileInputRef}
                 onChange={handleFileChange}
                 className="hidden"
+                accept=".pdf,.docx,.txt"
               />
               <Button className="bg-gradient-to-r from-[#0F2A40] to-[#064E3B] text-white px-8 py-3 mt-4">
                 Select Document
               </Button>
-              {file && <p className="text-gray-200 mt-2">{file.name}</p>}
+              {file && (
+                <div className="mt-4 flex items-center justify-center gap-2 bg-green-900/30 border border-green-500/50 rounded-lg p-3">
+                  <CheckCircle className="w-5 h-5 text-green-400" />
+                  <p className="text-green-200 font-medium">{file.name}</p>
+                </div>
+              )}
             </div>
 
             {/* Analyze Button */}
             <Button
               onClick={handleAnalyze}
-              className="bg-cyan-600 text-white w-full py-3"
+              className="bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-white w-full py-4 text-lg font-semibold shadow-lg shadow-cyan-500/50 transition-all"
               disabled={loading}
             >
-              {loading ? "Analyzing..." : "Analyze Document"}
+              {loading ? (
+                <span className="flex items-center justify-center gap-2">
+                  <svg
+                    className="animate-spin h-5 w-5 text-white"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="none"
+                    viewBox="0 0 24 24"
+                  >
+                    <circle
+                      className="opacity-25"
+                      cx="12"
+                      cy="12"
+                      r="10"
+                      stroke="currentColor"
+                      strokeWidth="4"
+                    ></circle>
+                    <path
+                      className="opacity-75"
+                      fill="currentColor"
+                      d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                    ></path>
+                  </svg>
+                  Analyzing Document...
+                </span>
+              ) : (
+                `Analyze Document (${
+                  analysisType === "detailed" ? "Detailed" : "Standard"
+                })`
+              )}
             </Button>
           </CardContent>
         </Card>
