@@ -1,14 +1,23 @@
 # main.py
+
 import os
 import json
+import io
+import logging
 import time
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-import google.generativeai as genai
 from dotenv import load_dotenv
+import google.generativeai as genai
+from google.cloud import dlp_v2
+from google.cloud.dlp_v2 import types as dlp_types
 import PyPDF2
 from docx import Document
+
+# --- 0. CONFIGURE LOGGING ---
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # --- 1. LOAD ENVIRONMENT VARIABLES ---
 load_dotenv()
@@ -16,8 +25,8 @@ load_dotenv()
 # --- 2. INITIALIZE FASTAPI APP ---
 app = FastAPI(
     title="LexiGuard API",
-    description="Analyzes legal documents (text, PDF, or DOCX) using Google's Gemini AI.",
-    version="1.3.0"
+    description="Analyzes legal documents (text, PDF, or DOCX) using Google's Gemini AI with PII Redaction.",
+    version="1.4.0"
 )
 
 # --- 3. ENABLE CORS ---
@@ -32,9 +41,9 @@ app.add_middleware(
 # --- 4. CONFIGURE GOOGLE GEMINI ---
 API_KEY = os.getenv("GOOGLE_API_KEY")
 if not API_KEY:
-    raise ValueError("GOOGLE_API_KEY not found. Please set it in your .env file.")
-
-genai.configure(api_key=API_KEY)
+    logger.warning("GOOGLE_API_KEY not found in .env. Relying on ADC or Cloud Run credentials.")
+else:
+    genai.configure(api_key=API_KEY)
 
 safety_settings = {
     "HARM_CATEGORY_HARASSMENT": "block_none",
@@ -43,17 +52,77 @@ safety_settings = {
     "HARM_CATEGORY_DANGEROUS_CONTENT": "block_none",
 }
 
-model = genai.GenerativeModel(
-    "models/gemini-2.5-flash",
-    safety_settings=safety_settings
+# Initialize Gemini model - using models from list_models()
+# For v1beta API, must use FULL model name as returned by list_models()
+MODEL_NAME = "models/gemini-2.5-flash"  # Latest Gemini Flash model
+model = None
+
+try:
+    model = genai.GenerativeModel(MODEL_NAME, safety_settings=safety_settings)
+    logger.info(f"✅ Gemini model initialized successfully with {MODEL_NAME}")
+except Exception as e:
+    logger.error(f"❌ Failed to initialize Gemini model '{MODEL_NAME}': {e}")
+    logger.error("Please check:")
+    logger.error("  1. Your GOOGLE_API_KEY is set correctly in .env")
+    logger.error("  2. The API key has Gemini API access enabled")
+    logger.error("  3. Internet connection is working")
+    model = None
+    MODEL_NAME = None
+
+# --- 5. CONFIGURE GOOGLE CLOUD DLP ---
+# Initialize DLP client lazily to avoid multiprocessing issues
+dlp_client = None
+PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT")
+
+def get_dlp_client():
+    """Lazy initialization of DLP client"""
+    global dlp_client
+    if dlp_client is None:
+        try:
+            dlp_client = dlp_v2.DlpServiceClient()
+            logger.info("DLP client initialized successfully")
+        except Exception as e:
+            logger.warning(f"DLP client initialization failed: {e}")
+            logger.warning("PII redaction will be disabled")
+    return dlp_client
+
+if not PROJECT_ID:
+    logger.warning("GOOGLE_CLOUD_PROJECT not set; DLP may fail without ADC context.")
+
+
+# Fix: Use correct DLP config objects for current google-cloud-dlp
+
+
+INFO_TYPES_TO_REDACT = [
+    dlp_types.InfoType(name="PERSON_NAME"),
+    dlp_types.InfoType(name="EMAIL_ADDRESS"),
+    dlp_types.InfoType(name="PHONE_NUMBER"),
+    dlp_types.InfoType(name="STREET_ADDRESS"),
+    dlp_types.InfoType(name="CREDIT_CARD_NUMBER"),
+    dlp_types.InfoType(name="DATE_OF_BIRTH"),
+    dlp_types.InfoType(name="US_SOCIAL_SECURITY_NUMBER"),
+    # Removed INDIA_AADHAAR_ID_NUMBER - not available in all regions
+]
+
+
+info_type_transformations = dlp_types.InfoTypeTransformations(
+    transformations=[
+        {
+            "info_types": INFO_TYPES_TO_REDACT,
+            "primitive_transformation": dlp_types.PrimitiveTransformation(
+                replace_with_info_type_config=dlp_types.ReplaceWithInfoTypeConfig()
+            ),
+        }
+    ]
 )
 
-# --- 5. DATA MODELS ---
+DEIDENTIFY_CONFIG = dlp_types.DeidentifyConfig(
+    info_type_transformations=info_type_transformations
+)
+
+# --- 6. DATA MODELS ---
 class DocumentRequest(BaseModel):
     text: str
-
-    class Config:
-        schema_extra = {"example": {"text": "This is a sample rental agreement..."}}
 
 class ChatRequest(BaseModel):
     message: str
@@ -69,7 +138,8 @@ class DocumentEmailRequest(BaseModel):
 class ExtendedAnalysisRequest(BaseModel):
     text: str
 
-# --- 6. PROMPTS ---
+# --- 7. PROMPTS (FULL RESTORED) ---
+
 SUMMARY_PROMPT = """
 You are LexiGuard, an expert AI assistant that explains complex legal documents in simple terms.
 Analyze the following contract. Provide a concise, bullet-point summary covering:
@@ -142,7 +212,6 @@ Risky Clause:
 {clause}
 """
 
-# --- NEW: DETAILED CLAUSE EXPLANATION PROMPT ---
 DETAILED_CLAUSE_ANALYSIS_PROMPT = """
 You are a legal expert analyzing contracts and agreements for LexiGuard. 
 Analyze the following document and identify ALL risky or concerning clauses with deep explanations.
@@ -179,291 +248,220 @@ If no risks are found, return an empty array: []
 CRITICAL: Respond ONLY with valid JSON, no additional text, no markdown.
 """
 
-# --- 7. HELPERS ---
-def analyze_text(document_text: str):
-    """Analyze a legal document: generate summary, risk analysis, and suggestions."""
-    
-    # --- AI Call 1: Summary ---
-    summary_prompt_with_formatting = f"""
-You are LexiGuard, an expert AI assistant that explains complex legal documents in simple terms.
-Analyze the following contract and return a properly formatted text summary.
-Use numbered sections, line breaks, and clear headings.
-Cover:
+# --- 8. HELPER FUNCTIONS ---
+# Model is already initialized above (lines 47-82) - using gemini-1.5-flash
+# No need for duplicate get_working_model() function
 
-1. Primary Purpose
-2. Key Responsibilities of each party
-3. Duration and Financial Terms
-4. Liability
-5. Non-Compete (if any)
-Do NOT use Markdown or bullets, just clean formatted text.
-Document: {document_text}
-"""
+def redact_text_with_dlp(text: str):
+    if not text or not PROJECT_ID:
+        logger.warning("DLP: Project ID not configured. Skipping redaction.")
+        return text, False
+
+    # Get DLP client (lazy initialization)
+    client = get_dlp_client()
+    if not client:
+        logger.warning("DLP client not available. Skipping redaction.")
+        return text, False
+
+    parent_path = f"projects/{PROJECT_ID}/locations/global"
+    item = {"value": text}
+
     try:
-        summary_response = model.generate_content([summary_prompt_with_formatting])
-        summary = getattr(summary_response, "text", "").strip() or "Summary could not be generated."
-    except Exception as e:
-        summary = f"Summary could not be generated. Error: {str(e)}"
-
-    # Small delay for rate limits
-    time.sleep(5)
-
-    # --- AI Call 2: Risk Analysis ---
-    try:
-        risk_response = model.generate_content([RISK_ANALYSIS_PROMPT, document_text])
-        risks_json_string = (
-            risk_response.text.strip()
-            .replace("```json", "")
-            .replace("```", "")
+        response = client.deidentify_content(
+            request={
+                "parent": parent_path,
+                "deidentify_config": DEIDENTIFY_CONFIG,
+                "inspect_config": {"info_types": INFO_TYPES_TO_REDACT},
+                "item": item,
+            }
         )
-        risks_data = json.loads(risks_json_string)
-        risks = risks_data.get("risks", [])
+        redacted = response.item.value
+        changed = redacted != text
+        logger.info("DLP Redaction complete.")
+        return redacted, changed
     except Exception as e:
-        risks = []
+        logger.error(f"DLP failed: {e}")
+        return text, False
 
-    # --- Generate Suggestions based on High/Medium risks ---
-    suggestions = []
-    for risk in risks:
-        clause = risk.get("clause_text", "")
-        severity = risk.get("severity", "Medium")
-        if severity == "High":
-            suggestions.append(
-                f"Review or negotiate the following clause to reduce risk: '{clause}'"
-            )
-        else:
-            suggestions.append(
-                f"Be aware of this clause: '{clause}'"
-            )
+def extract_text_from_pdf(file_stream):
+    try:
+        pdf = PyPDF2.PdfReader(file_stream)
+        return "".join([p.extract_text() or "" for p in pdf.pages])
+    except Exception as e:
+        logger.error(f"PDF extraction failed: {e}")
+        raise HTTPException(status_code=500, detail="Error extracting text from PDF.")
 
-    return {
-        "summary": summary,
-        "risks": risks,
-        "suggestions": suggestions
-    }
+def extract_text_from_docx(file_stream):
+    try:
+        doc = Document(file_stream)
+        return "\n".join([p.text for p in doc.paragraphs])
+    except Exception as e:
+        logger.error(f"DOCX extraction failed: {e}")
+        raise HTTPException(status_code=500, detail="Error extracting text from DOCX.")
 
-def analyze_clauses_detailed(document_text: str):
-    """
-    NEW FUNCTION: Perform deep clause-by-clause analysis with explanations, 
-    impact assessment, and recommendations.
-    """
-    prompt = f"{DETAILED_CLAUSE_ANALYSIS_PROMPT}\n\nDocument:\n{document_text[:12000]}"
+# --- 9. CORE ANALYSIS LOGIC ---
+def analyze_text_internal(text: str):
+    if model is None:
+        raise HTTPException(status_code=503, detail="AI model not initialized. Check backend logs.")
     
     try:
-        response = model.generate_content([prompt])
-        response_text = getattr(response, "text", "").strip()
-        
-        # Clean JSON response
-        response_text = response_text.replace("```json", "").replace("```", "").strip()
-        
-        # Parse JSON
-        clauses = json.loads(response_text)
-        
-        # Ensure it's a list
-        if not isinstance(clauses, list):
-            return []
-        
-        return clauses
-    
-    except json.JSONDecodeError as e:
-        print(f"JSON Parse Error in detailed analysis: {e}")
-        print(f"Raw response: {response_text[:500]}")
-        return []
-    
+        redacted_text, changed = redact_text_with_dlp(text)
+        prompt = f"{SUMMARY_PROMPT}\n\nDocument:\n{redacted_text}"
+        response = model.generate_content(prompt)
+        summary = response.text.strip()
+
+        risk_prompt = f"{RISK_ANALYSIS_PROMPT}\n\nDocument:\n{redacted_text}"
+        risk_response = model.generate_content(risk_prompt)
+        try:
+            # Clean JSON response
+            risks_text = risk_response.text.strip().replace("```json", "").replace("```", "").strip()
+            risks = json.loads(risks_text)
+        except Exception as e:
+            logger.error(f"Risk JSON parse error: {e}")
+            risks = {"risks": []}
+
+        return {
+            "summary": summary,
+            "risks": risks,
+            "pii_redacted": changed
+        }
     except Exception as e:
-        print(f"Error in detailed clause analysis: {str(e)}")
-        return []
+        logger.error(f"Error in analyze_text_internal: {e}")
+        raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
 
-def extract_text_from_pdf(file) -> str:
-    pdf_reader = PyPDF2.PdfReader(file)
-    text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text() or ""
-    return text
+def analyze_clauses_detailed_internal(text: str):
+    if model is None:
+        raise HTTPException(status_code=503, detail="AI model not initialized. Check backend logs.")
+    
+    try:
+        redacted_text, changed = redact_text_with_dlp(text)
+        prompt = f"{DETAILED_CLAUSE_ANALYSIS_PROMPT}\n\nDocument:\n{redacted_text}"
+        response = model.generate_content(prompt)
+        try:
+            # Clean JSON response
+            risks_text = response.text.strip().replace("```json", "").replace("```", "").strip()
+            risks = json.loads(risks_text)
+        except Exception as e:
+            logger.error(f"Clause JSON parse error: {e}")
+            risks = []
+        return {"risks": risks, "pii_redacted": changed}
+    except Exception as e:
+        logger.error(f"Error in analyze_clauses_detailed_internal: {e}")
+        raise HTTPException(status_code=500, detail=f"Clause analysis failed: {str(e)}")
 
-def extract_text_from_docx(file) -> str:
-    doc = Document(file)
-    text = ""
-    for para in doc.paragraphs:
-        text += para.text + "\n"
-    return text
-
-# --- 8. ROUTES ---
-@app.get("/")
-async def root():
-    return {
-        "message": "LexiGuard API is running.",
-        "version": "1.3.0",
-        "endpoints": [
-            "/analyze",
-            "/analyze-file (Standard Analysis with Negotiation)",
-            "/analyze-clauses (Detailed Clause Analysis)",
-            "/draft-negotiation (Generate negotiation emails)",
-            "/draft-document-email (Generate comprehensive document review email)",
-            "/analyze-extended (Fairness scoring)",
-            "/chat"
-        ]
-    }
-
+# --- 10. API ROUTES ---
 @app.post("/analyze")
 async def analyze_document(request: DocumentRequest):
-    result = analyze_text(request.text)
-    result["file_type"] = "Text"
-    result["privacy_notice"] = "Your file was processed in-memory and deleted after extraction."
-    return result
+    return analyze_text_internal(request.text)
 
 @app.post("/analyze-file")
-async def analyze_file(
-    file: UploadFile = File(None),
-    text: str = Form(None)
-):
+async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
     """
-    STANDARD ANALYSIS endpoint with negotiation support.
-    Returns: summary, risks, suggestions, and file type.
+    Standard analysis endpoint - accepts file upload or text
     """
     if file:
-        filename = file.filename.lower()
-        if filename.endswith(".pdf"):
-            text_content = extract_text_from_pdf(file.file)
-            file_type = "PDF"
-        elif filename.endswith(".docx"):
-            text_content = extract_text_from_docx(file.file)
-            file_type = "DOCX"
+        ext = file.filename.split(".")[-1].lower()
+        if ext == "pdf":
+            document_text = extract_text_from_pdf(io.BytesIO(await file.read()))
+        elif ext == "docx":
+            document_text = extract_text_from_docx(io.BytesIO(await file.read()))
+        elif ext == "txt":
+            document_text = (await file.read()).decode("utf-8")
         else:
-            return {"error": "Unsupported file type. Only PDF or DOCX allowed."}
+            raise HTTPException(status_code=400, detail="Unsupported file format")
     elif text:
-        text_content = text
-        file_type = "Text"
+        document_text = text
     else:
-        return {"error": "No file or text provided."}
+        raise HTTPException(status_code=400, detail="No file or text provided")
 
-    if not text_content.strip():
-        return {"error": "No text could be extracted from the document."}
-
-    result = analyze_text(text_content)
-    result["file_type"] = file_type
-    result["privacy_notice"] = "Your file was processed in-memory and deleted after extraction."
-    return result
-
-# --- NEW ENDPOINT: Detailed Clause Analysis ---
-@app.post("/analyze-clauses")
-async def analyze_clauses_endpoint(
-    file: UploadFile = File(None),
-    text: str = Form(None)
-):
-    """
-    DETAILED CLAUSE ANALYSIS endpoint.
-    Deep clause-by-clause analysis with detailed explanations,
-    impact assessment, and recommendations.
+    result = analyze_text_internal(document_text)
     
-    Returns:
-    - filename (if file uploaded)
-    - file_type (PDF, DOCX, or Text)
-    - total_risky_clauses (count)
-    - clauses (array of detailed clause objects)
-    - document_preview (first 300 characters)
-    """
-    if file:
-        filename = file.filename.lower()
-        if filename.endswith(".pdf"):
-            text_content = extract_text_from_pdf(file.file)
-            file_type = "PDF"
-        elif filename.endswith(".docx"):
-            text_content = extract_text_from_docx(file.file)
-            file_type = "DOCX"
-        else:
-            return {"error": "Unsupported file type. Only PDF or DOCX allowed."}
-        filename_display = file.filename
-    elif text:
-        text_content = text
-        file_type = "Text"
-        filename_display = "Direct Text Input"
-    else:
-        return {"error": "No file or text provided."}
-
-    if not text_content.strip():
-        return {"error": "No text could be extracted from the document."}
-
-    # Perform detailed clause analysis
-    clauses = analyze_clauses_detailed(text_content)
-    
-    return {
-        "filename": filename_display,
-        "file_type": file_type,
-        "total_risky_clauses": len(clauses),
-        "clauses": clauses,
-        "document_preview": text_content[:300],
-        "privacy_notice": "Your file was processed in-memory and deleted after extraction."
+    # Return in format expected by frontend
+    response = {
+        "filename": file.filename if file else "Text Input",
+        "file_type": file.filename.split(".")[-1].upper() if file else "Text",
+        "summary": result.get("summary", ""),
+        "risks": result.get("risks", {}).get("risks", []),
+        "pii_redacted": result.get("pii_redacted", False)
     }
+    
+    # Add privacy notice if PII was redacted
+    if result.get("pii_redacted", False):
+        response["privacy_notice"] = "✓ Your Personal Data Has Been Redacted for Privacy."
+    
+    return response
 
-# --- RESTORED: NEGOTIATION ENDPOINT ---
-@app.post("/draft-negotiation")
-async def draft_negotiation(request: NegotiationRequest):
-    """Drafts a polite negotiation email for a risky clause."""
+@app.post("/analyze-clauses")
+async def analyze_clauses(file: UploadFile = File(None), text: str = Form(None)):
+    """
+    Detailed clause analysis endpoint - accepts file upload or text
+    """
+    if file:
+        ext = file.filename.split(".")[-1].lower()
+        if ext == "pdf":
+            document_text = extract_text_from_pdf(io.BytesIO(await file.read()))
+        elif ext == "docx":
+            document_text = extract_text_from_docx(io.BytesIO(await file.read()))
+        elif ext == "txt":
+            document_text = (await file.read()).decode("utf-8")
+        else:
+            raise HTTPException(status_code=400, detail="Unsupported file format")
+    elif text:
+        document_text = text
+    else:
+        raise HTTPException(status_code=400, detail="No file or text provided")
+    
+    result = analyze_clauses_detailed_internal(document_text)
+    
+    # Return in format expected by frontend
+    response = {
+        "filename": file.filename if file else "Text Input",
+        "file_type": file.filename.split(".")[-1].upper() if file else "Text",
+        "total_risky_clauses": len(result.get("risks", [])),
+        "clauses": result.get("risks", []),
+        "pii_redacted": result.get("pii_redacted", False)
+    }
+    
+    # Add privacy notice if PII was redacted
+    if result.get("pii_redacted", False):
+        response["privacy_notice"] = "✓ Your Personal Data Has Been Redacted for Privacy."
+    
+    return response
+
+@app.post("/negotiate-clause")
+async def negotiate_clause(request: NegotiationRequest):
     prompt = NEGOTIATION_PROMPT.format(clause=request.clause)
-    try:
-        resp = model.generate_content([prompt])
-        email_text = getattr(resp, "text", "").strip() or "Could not generate email."
-    except Exception as e:
-        email_text = f"Error: {str(e)}"
-    return {"negotiation_email": email_text}
+    response = model.generate_content(prompt)
+    return {"email": response.text.strip()}
 
-# --- NEW: DOCUMENT EMAIL GENERATION ---
-@app.post("/draft-document-email")
-async def draft_document_email(request: DocumentEmailRequest):
-    """
-    Generates a comprehensive professional email covering all document findings.
-    Used for both standard and detailed analysis results.
-    """
+@app.post("/generate-email")
+async def generate_email(request: DocumentEmailRequest):
     prompt = DOCUMENT_EMAIL_PROMPT.format(
-        document_summary=request.document_summary[:2000],  # Limit length
-        risk_summary=request.risk_summary[:2000]
+        document_summary=request.document_summary,
+        risk_summary=request.risk_summary
     )
-    
+    response = model.generate_content(prompt)
+    return {"email": response.text.strip()}
+
+@app.post("/fairness-score")
+async def fairness_score(request: NegotiationRequest):
+    prompt = FAIRNESS_PROMPT.format(clause=request.clause)
+    response = model.generate_content(prompt)
     try:
-        resp = model.generate_content([prompt])
-        email_text = getattr(resp, "text", "").strip() or "Could not generate email."
-    except Exception as e:
-        email_text = f"Error generating email: {str(e)}"
-    
-    return {"document_email": email_text}
+        return json.loads(response.text)
+    except Exception:
+        return {"error": "Could not parse AI response"}
 
-# --- RESTORED: EXTENDED ANALYSIS WITH FAIRNESS SCORING ---
-@app.post("/analyze-extended")
-async def analyze_extended(request: ExtendedAnalysisRequest):
-    """Performs extended analysis with clause comparison and fairness scoring."""
-    base_result = analyze_text(request.text)
-
-    fairness_results = []
-    for risk in base_result.get("risks", []):
-        clause_text = risk.get("clause_text", "")
-        if not clause_text.strip():
-            continue
-        prompt = FAIRNESS_PROMPT.format(clause=clause_text)
-        try:
-            resp = model.generate_content([prompt])
-            fairness_json = (
-                resp.text.strip()
-                .replace("```json", "")
-                .replace("```", "")
-            )
-            parsed = json.loads(fairness_json)
-        except Exception as e:
-            parsed = {
-                "standard_clause": "",
-                "risky_clause": clause_text,
-                "fairness_score": 50,
-                "explanation": f"Error: {str(e)}"
-            }
-        fairness_results.append(parsed)
-
-        # Respect rate limits
-        time.sleep(2)
-
-    base_result["fairness_analysis"] = fairness_results
-    return base_result
+@app.get("/")
+def root():
+    return {"message": "LexiGuard API is running successfully 🚀"}
 
 # --- CHAT ENDPOINT ---
 @app.post("/chat")
 async def chat_with_document(request: ChatRequest):
+    """
+    Chat with document endpoint - allows users to ask questions about the analyzed document
+    """
     if not request.message.strip() or not request.document_text.strip():
         return {"reply": "Please provide a message and document text."}
 
@@ -480,14 +478,18 @@ User Message:
 Respond concisely and clearly for a non-lawyer.
 """
     try:
-        resp = model.generate_content([prompt])
-        answer = getattr(resp, "text", "").strip() or "No answer could be generated."
+        response = model.generate_content(prompt)
+        answer = response.text.strip() or "No answer could be generated."
     except Exception as e:
+        logger.error(f"Chat error: {e}")
         answer = f"Error: {str(e)}"
     return {"reply": answer}
 
-# --- 10. ENTRY POINT ---
+
+# --- RUN SERVER ---
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))  # Vercel sets PORT automatically
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    port = int(os.environ.get("PORT", 8000))
+    logger.info(f"Starting Uvicorn server on port {port}")
+    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
+
