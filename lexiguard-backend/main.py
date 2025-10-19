@@ -1,4 +1,4 @@
-# main.py
+# main.py - FIXED VERSION
 import os
 import json
 import time
@@ -286,6 +286,22 @@ def extract_text_from_docx(file) -> str:
         text += para.text + "\n"
     return text
 
+def extract_text_from_txt(file) -> str:
+    """NEW: Extract text from .txt files"""
+    try:
+        # Try UTF-8 first
+        content = file.read()
+        if isinstance(content, bytes):
+            text = content.decode('utf-8')
+        else:
+            text = content
+        return text
+    except UnicodeDecodeError:
+        # Fallback to latin-1 if UTF-8 fails
+        file.seek(0)
+        content = file.read()
+        return content.decode('latin-1')
+
 # --- 8. ROUTES ---
 @app.get("/")
 async def root():
@@ -300,7 +316,8 @@ async def root():
             "/draft-document-email (Generate comprehensive document review email)",
             "/analyze-extended (Fairness scoring)",
             "/chat"
-        ]
+        ],
+        "supported_formats": ["PDF", "DOCX", "TXT", "Plain Text"]
     }
 
 @app.post("/analyze")
@@ -317,6 +334,7 @@ async def analyze_file(
 ):
     """
     STANDARD ANALYSIS endpoint with negotiation support.
+    NOW SUPPORTS: PDF, DOCX, and TXT files
     Returns: summary, risks, suggestions, and file type.
     """
     if file:
@@ -327,8 +345,12 @@ async def analyze_file(
         elif filename.endswith(".docx"):
             text_content = extract_text_from_docx(file.file)
             file_type = "DOCX"
+        elif filename.endswith(".txt"):
+            # FIXED: Now handles .txt files
+            text_content = extract_text_from_txt(file.file)
+            file_type = "TXT"
         else:
-            return {"error": "Unsupported file type. Only PDF or DOCX allowed."}
+            return {"error": "Unsupported file type. Only PDF, DOCX, and TXT allowed."}
     elif text:
         text_content = text
         file_type = "Text"
@@ -353,10 +375,11 @@ async def analyze_clauses_endpoint(
     DETAILED CLAUSE ANALYSIS endpoint.
     Deep clause-by-clause analysis with detailed explanations,
     impact assessment, and recommendations.
+    NOW SUPPORTS: PDF, DOCX, and TXT files
     
     Returns:
     - filename (if file uploaded)
-    - file_type (PDF, DOCX, or Text)
+    - file_type (PDF, DOCX, TXT, or Text)
     - total_risky_clauses (count)
     - clauses (array of detailed clause objects)
     - document_preview (first 300 characters)
@@ -369,8 +392,12 @@ async def analyze_clauses_endpoint(
         elif filename.endswith(".docx"):
             text_content = extract_text_from_docx(file.file)
             file_type = "DOCX"
+        elif filename.endswith(".txt"):
+            # FIXED: Now handles .txt files
+            text_content = extract_text_from_txt(file.file)
+            file_type = "TXT"
         else:
-            return {"error": "Unsupported file type. Only PDF or DOCX allowed."}
+            return {"error": "Unsupported file type. Only PDF, DOCX, and TXT allowed."}
         filename_display = file.filename
     elif text:
         text_content = text
@@ -489,5 +516,5 @@ Respond concisely and clearly for a non-lawyer.
 # --- 10. ENTRY POINT ---
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))  # Vercel sets PORT automatically
+    port = int(os.environ.get("PORT", 8000))
     uvicorn.run("main:app", host="0.0.0.0", port=port)
