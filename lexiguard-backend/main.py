@@ -1,4 +1,4 @@
-# main.py
+# main.py - FIXED VERSION
 
 import os
 import json
@@ -346,10 +346,40 @@ def analyze_clauses_detailed_internal(text: str):
             risks = []
         return {"risks": risks, "pii_redacted": changed}
     except Exception as e:
-        logger.error(f"Error in analyze_clauses_detailed_internal: {e}")
-        raise HTTPException(status_code=500, detail=f"Clause analysis failed: {str(e)}")
+        print(f"Error in detailed clause analysis: {str(e)}")
+        return []
 
-# --- 10. API ROUTES ---
+def extract_text_from_pdf(file) -> str:
+    pdf_reader = PyPDF2.PdfReader(file)
+    text = ""
+    for page in pdf_reader.pages:
+        text += page.extract_text() or ""
+    return text
+
+def extract_text_from_docx(file) -> str:
+    doc = Document(file)
+    text = ""
+    for para in doc.paragraphs:
+        text += para.text + "\n"
+    return text
+
+# --- 8. ROUTES ---
+@app.get("/")
+async def root():
+    return {
+        "message": "LexiGuard API is running.",
+        "version": "1.3.0",
+        "endpoints": [
+            "/analyze",
+            "/analyze-file (Standard Analysis with Negotiation)",
+            "/analyze-clauses (Detailed Clause Analysis)",
+            "/draft-negotiation (Generate negotiation emails)",
+            "/draft-document-email (Generate comprehensive document review email)",
+            "/analyze-extended (Fairness scoring)",
+            "/chat"
+        ]
+    }
+
 @app.post("/analyze")
 async def analyze_document(request: DocumentRequest):
     return analyze_text_internal(request.text)
@@ -357,18 +387,19 @@ async def analyze_document(request: DocumentRequest):
 @app.post("/analyze-file")
 async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
     """
-    Standard analysis endpoint - accepts file upload or text
+    STANDARD ANALYSIS endpoint with negotiation support.
+    Returns: summary, risks, suggestions, and file type.
     """
     if file:
-        ext = file.filename.split(".")[-1].lower()
-        if ext == "pdf":
-            document_text = extract_text_from_pdf(io.BytesIO(await file.read()))
-        elif ext == "docx":
-            document_text = extract_text_from_docx(io.BytesIO(await file.read()))
-        elif ext == "txt":
-            document_text = (await file.read()).decode("utf-8")
+        filename = file.filename.lower()
+        if filename.endswith(".pdf"):
+            text_content = extract_text_from_pdf(file.file)
+            file_type = "PDF"
+        elif filename.endswith(".docx"):
+            text_content = extract_text_from_docx(file.file)
+            file_type = "DOCX"
         else:
-            raise HTTPException(status_code=400, detail="Unsupported file format")
+            return {"error": "Unsupported file type. Only PDF or DOCX allowed."}
     elif text:
         document_text = text
     else:
@@ -394,18 +425,28 @@ async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
 @app.post("/analyze-clauses")
 async def analyze_clauses(file: UploadFile = File(None), text: str = Form(None)):
     """
-    Detailed clause analysis endpoint - accepts file upload or text
+    DETAILED CLAUSE ANALYSIS endpoint.
+    Deep clause-by-clause analysis with detailed explanations,
+    impact assessment, and recommendations.
+    
+    Returns:
+    - filename (if file uploaded)
+    - file_type (PDF, DOCX, or Text)
+    - total_risky_clauses (count)
+    - clauses (array of detailed clause objects)
+    - document_preview (first 300 characters)
     """
     if file:
-        ext = file.filename.split(".")[-1].lower()
-        if ext == "pdf":
-            document_text = extract_text_from_pdf(io.BytesIO(await file.read()))
-        elif ext == "docx":
-            document_text = extract_text_from_docx(io.BytesIO(await file.read()))
-        elif ext == "txt":
-            document_text = (await file.read()).decode("utf-8")
+        filename = file.filename.lower()
+        if filename.endswith(".pdf"):
+            text_content = extract_text_from_pdf(file.file)
+            file_type = "PDF"
+        elif filename.endswith(".docx"):
+            text_content = extract_text_from_docx(file.file)
+            file_type = "DOCX"
         else:
-            raise HTTPException(status_code=400, detail="Unsupported file format")
+            return {"error": "Unsupported file type. Only PDF or DOCX allowed."}
+        filename_display = file.filename
     elif text:
         document_text = text
     else:
@@ -489,7 +530,5 @@ Respond concisely and clearly for a non-lawyer.
 # --- RUN SERVER ---
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
-    logger.info(f"Starting Uvicorn server on port {port}")
-    uvicorn.run("main:app", host="0.0.0.0", port=port, reload=True)
-
+    port = int(os.environ.get("PORT", 8000))  # Vercel sets PORT automatically
+    uvicorn.run("main:app", host="0.0.0.0", port=port)

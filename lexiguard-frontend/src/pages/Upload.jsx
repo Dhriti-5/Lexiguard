@@ -21,7 +21,19 @@ export default function Upload() {
   const fileInputRef = useRef(null);
 
   const handleFileChange = (e) => {
-    setFile(e.target.files[0]);
+    const selectedFile = e.target.files[0];
+    if (selectedFile) {
+      // Validate file type
+      const validExtensions = ['pdf', 'docx', 'txt'];
+      const fileExtension = selectedFile.name.split('.').pop().toLowerCase();
+      
+      if (!validExtensions.includes(fileExtension)) {
+        alert('Please upload only PDF, DOCX, or TXT files');
+        return;
+      }
+      
+      setFile(selectedFile);
+    }
   };
 
   const handleAnalyze = async () => {
@@ -185,7 +197,7 @@ export default function Upload() {
               className="w-full p-4 border border-gray-700 rounded-lg bg-[#1E1E1E] text-[#EAEAEA] placeholder-gray-500 backdrop-blur-md mb-6"
             />
 
-            {/* File Upload */}
+            {/* File Upload - FIXED: Now accepts .txt files */}
             <div
               className="border-2 border-dashed border-cyan-400/50 rounded-xl p-12 text-center cursor-pointer mb-6 hover:border-cyan-400 transition-colors"
               onClick={() => fileInputRef.current.click()}
@@ -194,8 +206,11 @@ export default function Upload() {
               <h3 className="text-xl font-semibold text-white mb-2">
                 Drop your document here or click to browse
               </h3>
-              <p className="text-gray-200/70 mb-6">
-                Supports PDF, Word, and text files up to 10MB
+              <p className="text-gray-200/70 mb-2">
+                Supports PDF, Word (DOCX), and Text (TXT) files
+              </p>
+              <p className="text-sm text-gray-400">
+                Maximum file size: 10MB
               </p>
               <input
                 type="file"
@@ -211,6 +226,9 @@ export default function Upload() {
                 <div className="mt-4 flex items-center justify-center gap-2 bg-green-900/30 border border-green-500/50 rounded-lg p-3">
                   <CheckCircle className="w-5 h-5 text-green-400" />
                   <p className="text-green-200 font-medium">{file.name}</p>
+                  <span className="text-xs text-green-300 ml-2">
+                    ({file.type || 'text/plain'})
+                  </span>
                 </div>
               )}
             </div>

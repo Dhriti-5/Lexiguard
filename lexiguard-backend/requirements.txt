@@ -2,6 +2,7 @@ fastapi
 uvicorn[standard]
 google-generativeai
 pydantic
+google-cloud-dlp
 python-dotenv
 PyPDF2
 python-multipart
