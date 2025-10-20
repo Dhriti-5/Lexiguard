@@ -72,6 +72,9 @@ export default function Results() {
   const [documentEmail, setDocumentEmail] = useState("");
   const [documentEmailLoading, setDocumentEmailLoading] = useState(false);
   const [copiedDocumentEmail, setCopiedDocumentEmail] = useState(false);
+  const [userEmail, setUserEmail] = useState("");
+  const [emailSending, setEmailSending] = useState(false);
+  const [emailSent, setEmailSent] = useState(false);
   const [expandedClauses, setExpandedClauses] = useState({});
 
   React.useEffect(() => {
@@ -173,6 +176,17 @@ export default function Results() {
     setTimeout(() => setCopiedEmail(false), 2000);
   };
 
+  // Open Gmail with pre-filled negotiation email
+  const handleDraftInGmail = () => {
+    if (!negotiationEmail) return;
+    
+    const subject = encodeURIComponent("Request for Contract Clause Review");
+    const body = encodeURIComponent(negotiationEmail);
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&su=${subject}&body=${body}`;
+    
+    window.open(gmailUrl, '_blank');
+  };
+
   // Close Negotiation Modal
   const handleCloseNegotiation = () => {
     setSelectedClauseForNegotiation(null);
@@ -180,11 +194,12 @@ export default function Results() {
     setCopiedEmail(false);
   };
 
-  // Handle Document Email Generation
+  // Handle Document Email Generation - Generate email preview first
   const handleGenerateDocumentEmail = async () => {
     setShowDocumentEmail(true);
     setDocumentEmailLoading(true);
     setDocumentEmail("");
+    setEmailSent(false);
 
     try {
       let documentText = "";
@@ -192,30 +207,93 @@ export default function Results() {
       
       if (isDetailedAnalysis) {
         const clauses = analysis.clauses || [];
-        documentText = analysis.document_preview || "";
-        riskSummary = `Found ${clauses.length} risky clauses: ${clauses.map((c, i) => `${i + 1}. ${c.clause} (${c.risk_level} Risk)`).join("; ")}`;
+        documentText = analysis.summary || "Detailed clause analysis completed";
+        riskSummary = `Found ${clauses.length} risky clauses requiring attention.`;
       } else {
         const risks = analysis.risks || [];
         documentText = analysis.summary || "";
-        riskSummary = `Identified ${risks.length} risks: ${risks.map((r, i) => `${i + 1}. ${r.clause_text} (${r.severity} Risk)`).join("; ")}`;
+        riskSummary = `Identified ${risks.length} potential risks in the document.`;
       }
 
+      // Generate email preview using existing endpoint
       const res = await fetch("http://localhost:8000/draft-document-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ 
           document_summary: documentText,
-          risk_summary: riskSummary
+          risk_summary: riskSummary,
         }),
       });
 
       const data = await res.json();
-      setDocumentEmail(data.document_email || "Could not generate email.");
+      setDocumentEmail(data.document_email || data.email || "Email generated successfully.");
     } catch (error) {
       console.error(error);
-      setDocumentEmail("Error generating document email.");
+      setDocumentEmail("Error generating document review. Please try again.");
     } finally {
       setDocumentEmailLoading(false);
+    }
+  };
+
+  // Send Document Email as PDF
+  const handleSendDocumentEmail = async () => {
+    if (!userEmail || !userEmail.includes('@')) {
+      alert('Please enter a valid email address');
+      return;
+    }
+
+    setEmailSending(true);
+    setEmailSent(false);
+
+    try {
+      let clauses = [];
+      let documentText = "";
+      let riskSummary = "";
+      
+      if (isDetailedAnalysis) {
+        clauses = analysis.clauses || [];
+        documentText = analysis.summary || "Detailed clause analysis completed";
+        riskSummary = `Found ${clauses.length} risky clauses requiring attention.`;
+      } else {
+        const risks = analysis.risks || [];
+        clauses = risks.map(r => ({
+          clause: r.clause_text,
+          risk: r.severity,
+          explanation: r.risk_explanation
+        }));
+        documentText = analysis.summary || "";
+        riskSummary = `Identified ${risks.length} potential risks in the document.`;
+      }
+
+      const res = await fetch("http://localhost:8000/send-document-review", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+          filename: analysis.filename || "Document",
+          document_summary: documentText,
+          risk_summary: riskSummary,
+          clauses: clauses,
+          user_email: userEmail,
+        }),
+      });
+
+      const data = await res.json();
+      
+      if (data.success) {
+        setEmailSent(true);
+        setTimeout(() => {
+          setShowDocumentEmail(false);
+          setUserEmail("");
+          setEmailSent(false);
+        }, 3000);
+      } else {
+        alert(data.detail || 'Failed to send email');
+      }
+    } catch (error) {
+      console.error(error);
+      alert('Error sending email. Please check your email configuration in backend .env file.');
+    } finally {
+      setEmailSending(false);
     }
   };
 
@@ -736,6 +814,13 @@ export default function Results() {
 
                     <div className="flex gap-3">
                       <Button
+                        onClick={handleDraftInGmail}
+                        className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg"
+                      >
+                        <Mail className="w-4 h-4 mr-2" />
+                        Draft in Gmail
+                      </Button>
+                      <Button
                         onClick={handleCopyEmail}
                         className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white"
                       >
@@ -806,10 +891,50 @@ export default function Results() {
                       </pre>
                     </div>
 
+                    {/* Email Input Field */}
+                    <div className="mb-4">
+                      <label className="block text-gray-300 text-sm font-medium mb-2">
+                        Your Email Address
+                      </label>
+                      <input
+                        type="email"
+                        value={userEmail}
+                        onChange={(e) => setUserEmail(e.target.value)}
+                        placeholder="Enter your email to receive PDF report"
+                        className="w-full px-4 py-2 bg-gray-800 border border-gray-600 rounded-lg text-white placeholder-gray-400 focus:outline-none focus:border-pink-500 transition-colors"
+                      />
+                    </div>
+
+                    {emailSent && (
+                      <div className="mb-4 bg-green-900/30 border border-green-500/50 rounded-lg p-3">
+                        <p className="text-green-400 text-sm flex items-center gap-2">
+                          <Check className="w-4 h-4" />
+                          Email sent successfully! Check your inbox.
+                        </p>
+                      </div>
+                    )}
+
                     <div className="flex gap-3">
                       <Button
+                        onClick={handleSendDocumentEmail}
+                        disabled={!userEmail || emailSending}
+                        className="flex-1 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        {emailSending ? (
+                          <>
+                            <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-2"></div>
+                            Sending...
+                          </>
+                        ) : (
+                          <>
+                            <Mail className="w-4 h-4 mr-2" />
+                            Send PDF via Email
+                          </>
+                        )}
+                      </Button>
+                      <Button
                         onClick={handleCopyDocumentEmail}
-                        className="flex-1 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white"
+                        className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white"
                       >
                         {copiedDocumentEmail ? (
                           <>
@@ -819,7 +944,7 @@ export default function Results() {
                         ) : (
                           <>
                             <Copy className="w-4 h-4 mr-2" />
-                            Copy to Clipboard
+                            Copy Text
                           </>
                         )}
                       </Button>
@@ -1332,6 +1457,13 @@ export default function Results() {
                   </div>
 
                   <div className="flex gap-3">
+                    <Button
+                      onClick={handleDraftInGmail}
+                      className="flex-1 bg-gradient-to-r from-cyan-600 to-blue-600 hover:from-cyan-500 hover:to-blue-500 text-white shadow-lg"
+                    >
+                      <Mail className="w-4 h-4 mr-2" />
+                      Draft in Gmail
+                    </Button>
                     <Button
                       onClick={handleCopyEmail}
                       className="flex-1 bg-cyan-600 hover:bg-cyan-500 text-white"

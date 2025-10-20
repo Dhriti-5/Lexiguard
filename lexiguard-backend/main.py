@@ -5,6 +5,10 @@ import json
 import io
 import logging
 import time
+import smtplib
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
+from email.mime.application import MIMEApplication
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
@@ -14,6 +18,11 @@ from google.cloud import dlp_v2
 from google.cloud.dlp_v2 import types as dlp_types
 import PyPDF2
 from docx import Document
+from reportlab.lib.pagesizes import letter
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, Table, TableStyle
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.lib.units import inch
+from reportlab.lib import colors
 
 # --- 0. CONFIGURE LOGGING ---
 logging.basicConfig(level=logging.INFO)
@@ -134,6 +143,13 @@ class NegotiationRequest(BaseModel):
 class DocumentEmailRequest(BaseModel):
     document_summary: str
     risk_summary: str
+
+class SendDocumentReviewRequest(BaseModel):
+    filename: str
+    document_summary: str
+    risk_summary: str
+    clauses: list
+    user_email: str
 
 class ExtendedAnalysisRequest(BaseModel):
     text: str
@@ -513,6 +529,145 @@ async def fairness_score(request: NegotiationRequest):
         return json.loads(response.text)
     except Exception:
         return {"error": "Could not parse AI response"}
+
+# --- SEND DOCUMENT REVIEW EMAIL ENDPOINT ---
+@app.post("/send-document-review")
+async def send_document_review(request: SendDocumentReviewRequest):
+    """
+    Generate PDF document review report and send via email
+    """
+    try:
+        # Create PDF in memory
+        pdf_buffer = io.BytesIO()
+        doc = SimpleDocTemplate(pdf_buffer, pagesize=letter)
+        styles = getSampleStyleSheet()
+        story = []
+        
+        # Add title
+        title_style = ParagraphStyle(
+            'CustomTitle',
+            parent=styles['Heading1'],
+            fontSize=24,
+            textColor=colors.HexColor('#064E3B'),
+            spaceAfter=30,
+            alignment=1  # Center
+        )
+        story.append(Paragraph("LexiGuard Document Review Report", title_style))
+        story.append(Spacer(1, 0.3*inch))
+        
+        # Add document info
+        heading_style = ParagraphStyle(
+            'CustomHeading',
+            parent=styles['Heading2'],
+            fontSize=16,
+            textColor=colors.HexColor('#0891B2'),
+            spaceAfter=12,
+            spaceBefore=12
+        )
+        
+        story.append(Paragraph("Document Information", heading_style))
+        story.append(Paragraph(f"<b>Filename:</b> {request.filename}", styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Add document summary
+        story.append(Paragraph("Document Summary", heading_style))
+        story.append(Paragraph(request.document_summary, styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Add risk summary
+        story.append(Paragraph("Risk Analysis", heading_style))
+        story.append(Paragraph(request.risk_summary, styles['Normal']))
+        story.append(Spacer(1, 0.2*inch))
+        
+        # Add risky clauses table
+        if request.clauses:
+            story.append(Paragraph("Identified Risky Clauses", heading_style))
+            
+            # Create table data
+            table_data = [['Clause', 'Risk Level', 'Explanation']]
+            for clause_item in request.clauses:
+                clause_text = clause_item.get('clause', 'N/A')[:100] + '...' if len(clause_item.get('clause', '')) > 100 else clause_item.get('clause', 'N/A')
+                risk = clause_item.get('risk', 'Unknown')
+                explanation = clause_item.get('explanation', 'No explanation provided')[:150] + '...' if len(clause_item.get('explanation', '')) > 150 else clause_item.get('explanation', 'No explanation provided')
+                
+                table_data.append([clause_text, risk, explanation])
+            
+            # Create table with styling
+            table = Table(table_data, colWidths=[2.5*inch, 1*inch, 3*inch])
+            table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#064E3B')),
+                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+                ('ALIGN', (0, 0), (-1, -1), 'LEFT'),
+                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+                ('FONTSIZE', (0, 0), (-1, 0), 12),
+                ('BOTTOMPADDING', (0, 0), (-1, 0), 12),
+                ('BACKGROUND', (0, 1), (-1, -1), colors.beige),
+                ('GRID', (0, 0), (-1, -1), 1, colors.black),
+                ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ]))
+            story.append(table)
+        
+        # Build PDF
+        doc.build(story)
+        pdf_buffer.seek(0)
+        pdf_data = pdf_buffer.read()
+        
+        # Send email using Gmail SMTP
+        # Note: You'll need to set up Gmail App Password and add to .env
+        smtp_server = "smtp.gmail.com"
+        smtp_port = 587
+        sender_email = os.getenv("GMAIL_SENDER_EMAIL")  # Add to .env
+        sender_password = os.getenv("GMAIL_APP_PASSWORD")  # Add Gmail App Password to .env
+        
+        if not sender_email or not sender_password:
+            raise HTTPException(
+                status_code=500,
+                detail="Email configuration missing. Please set GMAIL_SENDER_EMAIL and GMAIL_APP_PASSWORD in .env file"
+            )
+        
+        # Create email
+        msg = MIMEMultipart()
+        msg['From'] = sender_email
+        msg['To'] = request.user_email
+        msg['Subject'] = f"LexiGuard Document Review: {request.filename}"
+        
+        # Email body
+        body = f"""
+Hello,
+
+Please find attached your LexiGuard document review report for: {request.filename}
+
+This report includes:
+- Document Summary
+- Risk Analysis
+- Identified Risky Clauses
+
+Thank you for using LexiGuard!
+
+Best regards,
+The LexiGuard Team
+"""
+        msg.attach(MIMEText(body, 'plain'))
+        
+        # Attach PDF
+        pdf_attachment = MIMEApplication(pdf_data, _subtype='pdf')
+        pdf_attachment.add_header('Content-Disposition', 'attachment', filename=f'LexiGuard_Review_{request.filename}.pdf')
+        msg.attach(pdf_attachment)
+        
+        # Send email
+        with smtplib.SMTP(smtp_server, smtp_port) as server:
+            server.starttls()
+            server.login(sender_email, sender_password)
+            server.send_message(msg)
+        
+        return {
+            "success": True,
+            "message": f"Document review email sent successfully to {request.user_email}"
+        }
+        
+    except Exception as e:
+        logger.error(f"Error sending document review email: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to send email: {str(e)}")
 
 @app.get("/")
 def root():
