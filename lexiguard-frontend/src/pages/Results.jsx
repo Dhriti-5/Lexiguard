@@ -107,44 +107,51 @@ export default function Results() {
     }));
   };
 
-  // Handle Chat with Document Context
-  const handleSendMessage = async () => {
-    if (!chatMessage.trim()) return;
+// Handle Chat with Document Context
+const handleSendMessage = async () => {
+  if (!chatMessage.trim()) return;
 
-    const userMessage = chatMessage.trim();
-    setChatMessage("");
-    setChatLoading(true);
+  const userMessage = chatMessage.trim();
+  setChatMessage("");
+  setChatLoading(true);
 
-    setChatHistory((prev) => [...prev, { role: "user", content: userMessage }]);
+  setChatHistory((prev) => [...prev, { role: "user", content: userMessage }]);
 
-    try {
-      // Use redacted document text for chat (PII protected)
-      const documentText = analysis.document_text || "";
-
-      const res = await fetch("http://localhost:8000/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: userMessage,
-          document_text: documentText,
-        }),
-      });
-
-      const data = await res.json();
-      setChatHistory((prev) => [
-        ...prev,
-        { role: "assistant", content: data.reply || "No response received." },
-      ]);
-    } catch (error) {
-      console.error(error);
-      setChatHistory((prev) => [
-        ...prev,
-        { role: "assistant", content: "Error communicating with the server." },
-      ]);
-    } finally {
-      setChatLoading(false);
+  try {
+    // ✅ FIX: Use correct field names based on analysis type
+    const documentText = analysis.redacted_text || analysis.redacted_document_text || "";
+    
+    // ✅ ADD: Check if document text exists
+    if (!documentText) {
+      throw new Error("Document text not available");
     }
-  };
+
+    const res = await fetch("http://localhost:8000/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        message: userMessage,
+        document_text: documentText,
+      }),
+    });
+
+    const data = await res.json();
+    setChatHistory((prev) => [
+      ...prev,
+      { role: "assistant", content: data.reply || "No response received." },
+    ]);
+  } catch (error) {
+    console.error(error);
+    setChatHistory((prev) => [
+      ...prev,
+      { role: "assistant", content: error.message === "Document text not available" 
+        ? "❌ Document text not available. Please re-analyze the document." 
+        : "❌ Error communicating with the server." },
+    ]);
+  } finally {
+    setChatLoading(false);
+  }
+};
 
   // Handle Negotiation Email Generation
   const handleGenerateNegotiation = async (clauseText) => {

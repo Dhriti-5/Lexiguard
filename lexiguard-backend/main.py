@@ -322,6 +322,29 @@ def extract_text_from_docx(file_stream):
     except Exception as e:
         logger.error(f"DOCX extraction failed: {e}")
         raise HTTPException(status_code=500, detail="Error extracting text from DOCX.")
+    
+def extract_text_from_txt(file) -> str:
+    try:
+        # Read text file with UTF-8 encoding
+        content = file.read()
+        if isinstance(content, bytes):
+            text = content.decode('utf-8')
+        else:
+            text = content
+        return text
+    except UnicodeDecodeError:
+        # Try with different encoding if UTF-8 fails
+        try:
+            file.seek(0)
+            content = file.read()
+            text = content.decode('latin-1')
+            return text
+        except Exception as e:
+            logger.error(f"TXT extraction failed: {e}")
+            raise HTTPException(status_code=500, detail="Error extracting text from TXT file.")
+    except Exception as e:
+        logger.error(f"TXT extraction failed: {e}")
+        raise HTTPException(status_code=500, detail="Error extracting text from TXT file.")
 
 # --- 9. CORE ANALYSIS LOGIC ---
 def analyze_text_internal(text: str):
@@ -345,10 +368,11 @@ def analyze_text_internal(text: str):
             risks = {"risks": []}
 
         return {
-            "summary": summary,
-            "risks": risks,
-            "pii_redacted": changed
-        }
+    "summary": summary,
+    "risks": risks,
+    "pii_redacted": changed,
+    "redacted_text": redacted_text  # ✅ ADD THIS LINE
+}
     except Exception as e:
         logger.error(f"Error in analyze_text_internal: {e}")
         raise HTTPException(status_code=500, detail=f"Analysis failed: {str(e)}")
@@ -368,7 +392,11 @@ def analyze_clauses_detailed_internal(text: str):
         except Exception as e:
             logger.error(f"Clause JSON parse error: {e}")
             risks = []
-        return {"risks": risks, "pii_redacted": changed}
+        return {
+    "risks": risks, 
+    "pii_redacted": changed,
+    "redacted_text": redacted_text  # ✅ ADD THIS LINE
+}
     except Exception as e:
         print(f"Error in detailed clause analysis: {str(e)}")
         return []
@@ -417,15 +445,19 @@ async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
     if file:
         filename = file.filename.lower()
         if filename.endswith(".pdf"):
-            text_content = extract_text_from_pdf(file.file)
+            document_text = extract_text_from_pdf(file.file)
             file_type = "PDF"
         elif filename.endswith(".docx"):
-            text_content = extract_text_from_docx(file.file)
+            document_text = extract_text_from_docx(file.file)
             file_type = "DOCX"
+        elif filename.endswith(".txt"):  # ✅ ADD TXT SUPPORT
+            document_text = extract_text_from_txt(file.file)
+            file_type = "TXT"
         else:
-            return {"error": "Unsupported file type. Only PDF or DOCX allowed."}
+            return {"error": "Unsupported file type. Only PDF, DOCX, or TXT allowed."}
     elif text:
         document_text = text
+        file_type = "Text"  # ✅ ADD file_type for manual text input
     else:
         raise HTTPException(status_code=400, detail="No file or text provided")
 
@@ -441,7 +473,7 @@ async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
         "summary": result.get("summary", ""),
         "risks": result.get("risks", {}).get("risks", []),
         "pii_redacted": result.get("pii_redacted", False),
-        "document_text": redacted_document_text  # Redacted text for chat (PII protected)
+        "redacted_document_text": redacted_document_text
     }
     
     # Add privacy notice if PII was redacted
@@ -449,6 +481,7 @@ async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
         response["privacy_notice"] = "✓ Your Personal Data Has Been Redacted for Privacy."
     
     return response
+
 
 @app.post("/analyze-clauses")
 async def analyze_clauses(file: UploadFile = File(None), text: str = Form(None)):
@@ -459,7 +492,7 @@ async def analyze_clauses(file: UploadFile = File(None), text: str = Form(None))
     
     Returns:
     - filename (if file uploaded)
-    - file_type (PDF, DOCX, or Text)
+    - file_type (PDF, DOCX, TXT, or Text)
     - total_risky_clauses (count)
     - clauses (array of detailed clause objects)
     - document_preview (first 300 characters)
@@ -467,19 +500,24 @@ async def analyze_clauses(file: UploadFile = File(None), text: str = Form(None))
     if file:
         filename = file.filename.lower()
         if filename.endswith(".pdf"):
-            text_content = extract_text_from_pdf(file.file)
+            document_text = extract_text_from_pdf(file.file)
             file_type = "PDF"
         elif filename.endswith(".docx"):
-            text_content = extract_text_from_docx(file.file)
+            document_text = extract_text_from_docx(file.file)
             file_type = "DOCX"
+        elif filename.endswith(".txt"):  # ✅ ADD TXT SUPPORT
+            document_text = extract_text_from_txt(file.file)
+            file_type = "TXT"
         else:
-            return {"error": "Unsupported file type. Only PDF or DOCX allowed."}
+            return {"error": "Unsupported file type. Only PDF, DOCX, or TXT allowed."}
         filename_display = file.filename
     elif text:
         document_text = text
+        file_type = "Text"  # ✅ ADD file_type for manual text input
+        filename_display = "Text Input"
     else:
         raise HTTPException(status_code=400, detail="No file or text provided")
-    
+
     # Redact PII from document for chat (privacy protection)
     redacted_document_text, _ = redact_text_with_dlp(document_text)
     
@@ -492,7 +530,7 @@ async def analyze_clauses(file: UploadFile = File(None), text: str = Form(None))
         "total_risky_clauses": len(result.get("risks", [])),
         "clauses": result.get("risks", []),
         "pii_redacted": result.get("pii_redacted", False),
-        "document_text": redacted_document_text  # Redacted text for chat (PII protected)
+        "redacted_text": redacted_document_text
     }
     
     # Add privacy notice if PII was redacted
