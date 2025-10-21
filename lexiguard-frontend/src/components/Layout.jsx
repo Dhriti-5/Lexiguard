@@ -3,6 +3,7 @@ import { Link, useLocation, useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 import { createPageUrl } from "../utils";
 import { Button } from "./ui/button";
+import { motion, AnimatePresence } from "framer-motion";
 
 import { 
   Home, 
@@ -16,7 +17,9 @@ import {
   X,
   Shield,
   LogOut,
-  User
+  User,
+  AlertCircle,
+  Check
 } from "lucide-react";
 
 const navigationItems = [
@@ -37,6 +40,10 @@ export default function Layout({ children, currentPageName }) {
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
   const [showUserMenu, setShowUserMenu] = useState(false);
   const [imageError, setImageError] = useState(false);
+  
+  // ✅ NEW: Logout confirmation state
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
+  const [loggingOut, setLoggingOut] = useState(false);
 
   useEffect(() => {
     if (isDarkMode) {
@@ -66,15 +73,30 @@ export default function Layout({ children, currentPageName }) {
     return () => document.removeEventListener('mousedown', handleClickOutside);
   }, [showUserMenu]);
 
-  const handleLogout = async () => {
+  // ✅ NEW: Show logout confirmation instead of logging out directly
+  const handleLogoutClick = () => {
+    setShowUserMenu(false);
+    setShowLogoutConfirm(true);
+  };
+
+  // ✅ NEW: Confirm logout
+  const handleConfirmLogout = async () => {
+    setLoggingOut(true);
     try {
       await logout();
-      setShowUserMenu(false);
+      setShowLogoutConfirm(false);
       navigate('/');
     } catch (error) {
       console.error('Failed to logout:', error);
       alert('Failed to logout. Please try again.');
+    } finally {
+      setLoggingOut(false);
     }
+  };
+
+  // ✅ NEW: Cancel logout
+  const handleCancelLogout = () => {
+    setShowLogoutConfirm(false);
   };
 
   const handleGetStarted = () => {
@@ -238,7 +260,7 @@ export default function Layout({ children, currentPageName }) {
                           </p>
                         </div>
                         <button
-                          onClick={handleLogout}
+                          onClick={handleLogoutClick}
                           className={`w-full text-left px-4 py-3 text-sm flex items-center gap-2 transition-colors ${
                             isDarkMode ? 'hover:bg-gray-700 text-red-400' : 'hover:bg-gray-100 text-red-600'
                           }`}
@@ -321,8 +343,8 @@ export default function Layout({ children, currentPageName }) {
                     </div>
                     <button
                       onClick={() => {
-                        handleLogout();
                         setIsMobileMenuOpen(false);
+                        handleLogoutClick();
                       }}
                       className={`w-full flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                         isDarkMode ? 'text-red-400 hover:bg-gray-800' : 'text-red-600 hover:bg-gray-100'
@@ -413,6 +435,87 @@ export default function Layout({ children, currentPageName }) {
           </div>
         </footer>
       </div>
+
+      {/* ✅ NEW: Logout Confirmation Notification Popup - CENTERED */}
+      <AnimatePresence>
+        {showLogoutConfirm && (
+          <>
+            {/* Backdrop */}
+            <motion.div
+              initial={{ opacity: 0 }}
+              animate={{ opacity: 1 }}
+              exit={{ opacity: 0 }}
+              onClick={handleCancelLogout}
+              className="fixed inset-0 bg-black/50 backdrop-blur-sm z-[100]"
+            />
+
+            {/* Modal */}
+            <div className="fixed inset-0 flex items-center justify-center z-[101] p-4">
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9, y: 20 }}
+                animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 20 }}
+                transition={{ type: 'spring', damping: 25, stiffness: 300 }}
+                className="w-full max-w-md"
+              >
+                <div className="bg-gradient-to-br from-[#064E3B] to-[#0F2A40] rounded-xl shadow-2xl border border-red-400/30 overflow-hidden">
+                  {/* Header */}
+                  <div className="bg-gradient-to-r from-red-900/40 to-orange-900/40 px-5 py-4 flex items-center justify-between border-b border-gray-700/50">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-red-500/20 rounded-lg flex items-center justify-center">
+                        <AlertCircle className="w-6 h-6 text-red-400" />
+                      </div>
+                      <h3 className="text-white font-semibold text-lg">Confirm Logout</h3>
+                    </div>
+                    <button
+                      onClick={handleCancelLogout}
+                      disabled={loggingOut}
+                      className="text-gray-400 hover:text-white transition-colors disabled:opacity-50"
+                    >
+                      <X className="w-6 h-6" />
+                    </button>
+                  </div>
+
+                  {/* Body */}
+                  <div className="p-6">
+                    <p className="text-gray-200 text-base mb-6">
+                      Are you sure you want to sign out? Any unsaved work may be lost.
+                    </p>
+
+                    {/* Buttons */}
+                    <div className="flex gap-3">
+                      <button
+                        onClick={handleCancelLogout}
+                        disabled={loggingOut}
+                        className="flex-1 px-4 py-3 bg-gray-700 hover:bg-gray-600 text-white rounded-lg text-base font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        onClick={handleConfirmLogout}
+                        disabled={loggingOut}
+                        className="flex-1 px-4 py-3 bg-gradient-to-r from-red-600 to-red-500 hover:from-red-500 hover:to-red-400 text-white rounded-lg text-base font-medium transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+                      >
+                        {loggingOut ? (
+                          <>
+                            <div className="animate-spin rounded-full h-5 w-5 border-2 border-white border-t-transparent" />
+                            <span>Signing out...</span>
+                          </>
+                        ) : (
+                          <>
+                            <Check className="w-5 h-5" />
+                            <span>Yes, Logout</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </motion.div>
+            </div>
+          </>
+        )}
+      </AnimatePresence>
     </div>
   );
 }
