@@ -1,5 +1,6 @@
 import React, { useState, useRef } from "react";
 import { useNavigate } from "react-router-dom";
+import { useAuth } from "../contexts/AuthContext";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import {
@@ -11,6 +12,7 @@ import {
   CheckCircle,
 } from "lucide-react";
 import { motion } from "framer-motion";
+import { saveAnalysis } from "../services/firestoreService";
 
 export default function Upload() {
   const [file, setFile] = useState(null);
@@ -19,6 +21,7 @@ export default function Upload() {
   const [analysisType, setAnalysisType] = useState("detailed"); // "standard" or "detailed"
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
+  const { currentUser } = useAuth();
 
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
@@ -64,14 +67,31 @@ export default function Upload() {
       });
 
       const data = await res.json();
-      setLoading(false);
 
       if (data.error) {
+        setLoading(false);
         alert(data.error);
         return;
       }
 
-      navigate("/results", { state: { analysis: data, analysisType } });
+      // Save to Firestore if user is authenticated
+      let analysisId = null;
+      if (currentUser) {
+        try {
+          analysisId = await saveAnalysis(currentUser.uid, data);
+          console.log('✅ Analysis saved to dashboard with ID:', analysisId);
+        } catch (error) {
+          console.error('⚠️ Failed to save to dashboard:', error);
+          // Continue even if save fails - user can still see results
+        }
+      }
+
+      setLoading(false);
+
+      // Navigate to results - pass analysisId if saved to Firestore
+      navigate("/results" + (analysisId ? `/${analysisId}` : ""), { 
+        state: { analysis: data, analysisType, analysisId } 
+      });
     } catch (error) {
       console.error(error);
       setLoading(false);

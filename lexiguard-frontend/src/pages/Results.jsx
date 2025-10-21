@@ -1,9 +1,11 @@
-import React, { useState } from "react";
-import { useLocation, useNavigate } from "react-router-dom";
+import React, { useState, useEffect } from "react";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { useAuth } from "../contexts/AuthContext";
 import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import BackToTop from "../components/BackToTop";
+import { getAnalysisById } from "../services/firestoreService";
 
 import {
   AlertTriangle,
@@ -21,6 +23,7 @@ import {
   X,
   ChevronDown,
   ChevronUp,
+  Loader2,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
@@ -59,7 +62,13 @@ function highlightText(text) {
 export default function Results() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { analysis, analysisType } = location.state || {};
+  const { analysisId } = useParams(); // Get analysisId from URL if present
+  const { currentUser } = useAuth();
+  
+  // State from navigation or loaded from Firestore
+  const [analysis, setAnalysis] = useState(location.state?.analysis || null);
+  const [analysisType, setAnalysisType] = useState(location.state?.analysisType || null);
+  const [loading, setLoading] = useState(false);
 
   const [chatMessage, setChatMessage] = useState("");
   const [chatHistory, setChatHistory] = useState([]);
@@ -77,10 +86,60 @@ export default function Results() {
   const [emailSent, setEmailSent] = useState(false);
   const [expandedClauses, setExpandedClauses] = useState({});
 
-  React.useEffect(() => {
+  // Load analysis from Firestore if analysisId is in URL
+  useEffect(() => {
+    if (analysisId && currentUser && !analysis) {
+      loadAnalysisFromFirestore();
+    }
+  }, [analysisId, currentUser]);
+
+  const loadAnalysisFromFirestore = async () => {
+    try {
+      setLoading(true);
+      const analysisData = await getAnalysisById(analysisId, currentUser.uid);
+      
+      // Transform Firestore data to match expected format
+      const transformedAnalysis = {
+        filename: analysisData.originalFilename,
+        file_type: analysisData.fileType,
+        summary: analysisData.summary,
+        risks: analysisData.risks || [],
+        clauses: analysisData.clauses || [],
+        total_risky_clauses: analysisData.total_risky_clauses,
+        pii_redacted: analysisData.piiRedacted,
+        redacted_text: analysisData.redactedDocumentText,
+        redacted_document_text: analysisData.redactedDocumentText,
+        suggestions: analysisData.suggestions || [],
+        fairness_analysis: analysisData.fairness_analysis || [],
+        privacy_notice: analysisData.piiRedacted ? "✓ Your Personal Data Has Been Redacted for Privacy." : null,
+      };
+      
+      setAnalysis(transformedAnalysis);
+      setAnalysisType(analysisData.analysisType);
+      setLoading(false);
+    } catch (error) {
+      console.error("Error loading analysis:", error);
+      setLoading(false);
+      alert("Failed to load analysis. Redirecting to dashboard...");
+      navigate("/dashboard");
+    }
+  };
+
+  useEffect(() => {
     const chatContainer = document.getElementById("chat-container");
     if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
   }, [chatHistory]);
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-16 h-16 text-cyan-400 animate-spin mx-auto mb-4" />
+          <p className="text-gray-300 text-lg">Loading analysis...</p>
+        </div>
+      </div>
+    );
+  }
 
   if (!analysis) {
     return (
@@ -88,9 +147,14 @@ export default function Results() {
         <div className="text-center">
           <AlertTriangle className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
           <h2 className="text-2xl font-bold text-white mb-4">No Analysis Data</h2>
-          <Button onClick={() => navigate("/upload")} className="bg-cyan-600">
-            Go Back to Upload
-          </Button>
+          <div className="flex gap-4 justify-center">
+            <Button onClick={() => navigate("/upload")} className="bg-cyan-600">
+              Analyze New Document
+            </Button>
+            <Button onClick={() => navigate("/dashboard")} variant="outline" className="border-cyan-400 text-cyan-400">
+              Go to Dashboard
+            </Button>
+          </div>
         </div>
       </div>
     );

@@ -5,7 +5,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import Home from "./pages/Home";
 import Upload from "./pages/Upload";
 import Results from "./pages/Results";
- import Dashboard from "./pages/Dashboard";
+import Dashboard from "./pages/Dashboard";
 import Glossary from "./pages/Glossary";
 import FAQ from "./pages/FAQ";
 import About from "./pages/About";
@@ -36,6 +36,14 @@ function App() {
             />
             <Route
               path="/results"
+              element={
+                <ProtectedRoute>
+                  <Results />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/results/:analysisId"
               element={
                 <ProtectedRoute>
                   <Results />

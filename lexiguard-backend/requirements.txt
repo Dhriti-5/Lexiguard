@@ -8,4 +8,4 @@ PyPDF2
 python-multipart
 python-docx
 reportlab
-python-multipart
+firebase-admin

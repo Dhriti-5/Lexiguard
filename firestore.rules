@@ -1,0 +1,48 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // ========================================
+    // User Analyses Collection
+    // ========================================
+    // This collection stores privacy-safe analysis results
+    // Only redacted document text is stored (NO original documents)
+    
+    match /userAnalyses/{analysisId} {
+      
+      // READ: Allow if authenticated user owns this document
+      allow read: if request.auth != null 
+                  && request.auth.uid == resource.data.userID;
+      
+      // CREATE: Allow if authenticated and setting their own userID
+      allow create: if request.auth != null 
+                    && request.auth.uid == request.resource.data.userID
+                    && request.resource.data.keys().hasAll([
+                         'userID',
+                         'documentTitle', 
+                         'originalFilename',
+                         'uploadTimestamp',
+                         'fileType',
+                         'piiRedacted',
+                         'redactedDocumentText'
+                       ]);
+      
+      // UPDATE: Allow if authenticated user owns this document
+      // Only allow updating specific fields (prevent userID tampering)
+      allow update: if request.auth != null 
+                    && request.auth.uid == resource.data.userID
+                    && request.resource.data.userID == resource.data.userID;
+      
+      // DELETE: Allow if authenticated user owns this document
+      allow delete: if request.auth != null 
+                    && request.auth.uid == resource.data.userID;
+    }
+    
+    // ========================================
+    // Future Collections
+    // ========================================
+    // Add security rules for other collections here
+    // Example: userPreferences, sharedAnalyses, etc.
+    
+  }
+}
