@@ -31,6 +31,14 @@ logger = logging.getLogger(__name__)
 # --- 1. LOAD ENVIRONMENT VARIABLES ---
 load_dotenv()
 
+# Set Google Cloud credentials path
+credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+if credentials_path and not os.path.isabs(credentials_path):
+    # Convert relative path to absolute path
+    credentials_path = os.path.join(os.path.dirname(__file__), credentials_path)
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = credentials_path
+    logger.info(f"✅ Google Cloud credentials set to: {credentials_path}")
+
 # --- 2. INITIALIZE FASTAPI APP ---
 app = FastAPI(
     title="LexiGuard API",
@@ -599,7 +607,11 @@ def analyze_clauses_detailed_internal(text: str):
 }
     except Exception as e:
         print(f"Error in detailed clause analysis: {str(e)}")
-        return []
+        return {
+            "risks": [],
+            "pii_redacted": False,
+            "redacted_text": ""
+        }
 
 def extract_text_from_pdf(file) -> str:
     pdf_reader = PyPDF2.PdfReader(file)
