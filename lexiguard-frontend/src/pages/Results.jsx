@@ -148,7 +148,13 @@ export default function Results() {
   const { analysisId } = useParams();
   const { currentUser } = useAuth();
   
-  const [analysis, setAnalysis] = useState(location.state?.analysis || null);
+const [analysis, setAnalysis] = useState(() => {
+  const state = location.state?.analysis;
+  if (state) {
+    console.log("📦 Initial analysis from location.state:", state);
+  }
+  return state || null;
+});
   const [analysisType, setAnalysisType] = useState(location.state?.analysisType || null);
   const [loading, setLoading] = useState(false);
 
@@ -178,37 +184,71 @@ export default function Results() {
       loadAnalysisFromFirestore();
     }
   }, [analysisId, currentUser]);
+  useEffect(() => {
+  // Reset to English whenever we load a new analysis
+  setSelectedLanguage('en');
+  setTranslatedContent(null);
+  setTranslationLoading(false);
+}, [analysisId]);
 
-  const loadAnalysisFromFirestore = async () => {
-    try {
-      setLoading(true);
-      const analysisData = await getAnalysisById(analysisId, currentUser.uid);
-      
-      const transformedAnalysis = {
-        filename: analysisData.originalFilename,
-        file_type: analysisData.fileType,
-        summary: analysisData.summary,
-        risks: analysisData.risks || [],
-        clauses: analysisData.clauses || [],
-        total_risky_clauses: analysisData.total_risky_clauses,
-        pii_redacted: analysisData.piiRedacted,
-        redacted_text: analysisData.redactedDocumentText,
-        redacted_document_text: analysisData.redactedDocumentText,
-        suggestions: analysisData.suggestions || [],
-        fairness_analysis: analysisData.fairness_analysis || [],
-        privacy_notice: analysisData.piiRedacted ? "✓ Your Personal Data Has Been Redacted for Privacy." : null,
-      };
-      
-      setAnalysis(transformedAnalysis);
-      setAnalysisType(analysisData.analysisType);
-      setLoading(false);
-    } catch (error) {
-      console.error("Error loading analysis:", error);
-      setLoading(false);
-      alert("Failed to load analysis. Redirecting to dashboard...");
-      navigate("/dashboard");
-    }
-  };
+// ADD debug logging for displayedContent:
+useEffect(() => {
+  if (analysis) {
+    const content = getDisplayedContent();
+    console.log("🔍 Current displayed content:", {
+      selectedLanguage,
+      translationLoading,
+      hasTranslatedContent: !!translatedContent,
+      summary: content.summary?.substring(0, 100),
+      risksCount: content.risks?.length,
+      clausesCount: content.clauses?.length,
+      analysisType
+    });
+  }
+}, [analysis, selectedLanguage, translatedContent, translationLoading, analysisType]);
+
+
+ const loadAnalysisFromFirestore = async () => {
+  try {
+    setLoading(true);
+    const analysisData = await getAnalysisById(analysisId, currentUser.uid);
+    
+    console.log("📦 Loaded analysis from Firestore:", analysisData);
+    
+    const transformedAnalysis = {
+      filename: analysisData.originalFilename,
+      file_type: analysisData.fileType,
+      summary: analysisData.summary,
+      risks: analysisData.risks || [],
+      clauses: analysisData.clauses || [],
+      total_risky_clauses: analysisData.total_risky_clauses,
+      pii_redacted: analysisData.piiRedacted,
+      redacted_text: analysisData.redactedDocumentText,
+      redacted_document_text: analysisData.redactedDocumentText,
+      suggestions: analysisData.suggestions || [],
+      fairness_analysis: analysisData.fairness_analysis || [],
+      privacy_notice: analysisData.piiRedacted ? "✓ Your Personal Data Has Been Redacted for Privacy." : null,
+    };
+    
+    console.log("✅ Transformed analysis:", transformedAnalysis);
+    console.log("📊 Risk count:", transformedAnalysis.risks?.length || 0);
+    console.log("📊 Clause count:", transformedAnalysis.clauses?.length || 0);
+    
+    setAnalysis(transformedAnalysis);
+    setAnalysisType(analysisData.analysisType);
+    
+    // Ensure language is reset to English
+    setSelectedLanguage('en');
+    setTranslatedContent(null);
+    
+    setLoading(false);
+  } catch (error) {
+    console.error("Error loading analysis:", error);
+    setLoading(false);
+    alert("Failed to load analysis. Redirecting to dashboard...");
+    navigate("/dashboard");
+  }
+};
 
   useEffect(() => {
     const chatContainer = document.getElementById("chat-container");
@@ -319,32 +359,35 @@ const handleLanguageChange = async (languageCode) => {
 // Get displayed content based on selected language
   // Get displayed content based on selected language
   const getDisplayedContent = () => {
-    // Show loading state - return empty during translation
-    if (translationLoading) {
-      return {
-        summary: "",
-        risks: [],
-        clauses: [],
-        suggestions: []
-      };
-    }
-
-    if (selectedLanguage === 'en' || !translatedContent) {
-      return {
-        summary: analysis.summary || "",
-        risks: analysis.risks || [],
-        clauses: analysis.clauses || [],
-        suggestions: analysis.suggestions || []
-      };
-    }
-
+  // If loading translation, show loading state
+  if (translationLoading) {
     return {
-      summary: translatedContent.summary || analysis.summary || "",
-      risks: translatedContent.risks || analysis.risks || [],
-      clauses: translatedContent.clauses || analysis.clauses || [],
-      suggestions: translatedContent.suggestions || analysis.suggestions || []
+      summary: "",
+      risks: [],
+      clauses: [],
+      suggestions: []
     };
+  }
+
+  // If English is selected OR no translation exists, show original content
+  if (selectedLanguage === 'en' || !translatedContent) {
+    return {
+      summary: analysis?.summary || "",
+      risks: analysis?.risks || [],
+      clauses: analysis?.clauses || [],
+      suggestions: analysis?.suggestions || []
+    };
+  }
+
+  // Show translated content if available
+  return {
+    summary: translatedContent.summary || analysis?.summary || "",
+    risks: translatedContent.risks || analysis?.risks || [],
+    clauses: translatedContent.clauses || analysis?.clauses || [],
+    suggestions: translatedContent.suggestions || analysis?.suggestions || []
   };
+};
+
   const toggleClause = (index) => {
     setExpandedClauses(prev => ({
       ...prev,
