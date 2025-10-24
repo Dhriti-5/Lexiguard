@@ -6,7 +6,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card"
 import { Badge } from "../components/ui/badge";
 import BackToTop from "../components/BackToTop";
 import { getAnalysisById } from "../services/firestoreService";
-
+import LanguageSelector from "../components/LanguageSelector";
+import { getTranslation, requestTranslation } from "../services/firestoreService";
+// REMOVE THIS LINE: import MarkdownRenderer from "../components/MarkdownRenderer";
 import {
   AlertTriangle,
   CheckCircle,
@@ -24,11 +26,93 @@ import {
   ChevronDown,
   ChevronUp,
   Loader2,
+  Globe,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 const KEYWORDS_REGEX = /\b(agreement|contract|clause|liability|termination|penalty|indemnity|renewal)\b/gi;
 const ACTIONABLE_REGEX = /\b(\d+\s*(days?|weeks?|months?|years?)|due by|deadline|penalty|fine|termination|payment of \$?\d+|effective date|must|shall|obligated|required)\b/gi;
+
+// Add this component after your imports and before the Results component
+// MarkdownRenderer Component
+const MarkdownRenderer = ({ text }) => {
+  if (!text || typeof text !== 'string') return null;
+
+  const paragraphs = text.split('\n\n');
+
+  const renderLine = (line, index) => {
+   // Bold: **text**
+line = line.replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>');
+// Italic: *text*
+line = line.replace(/\*(.*?)\*/g, '<em>$1</em>');
+
+    if (line.startsWith('### ')) {
+      return <h3 key={index} className="text-lg font-bold text-white mt-4 mb-2" dangerouslySetInnerHTML={{ __html: line.replace('### ', '') }} />;
+    }
+    if (line.startsWith('## ')) {
+      return <h2 key={index} className="text-xl font-bold text-white mt-4 mb-2" dangerouslySetInnerHTML={{ __html: line.replace('## ', '') }} />;
+    }
+    if (line.startsWith('# ')) {
+      return <h1 key={index} className="text-2xl font-bold text-white mt-4 mb-2" dangerouslySetInnerHTML={{ __html: line.replace('# ', '') }} />;
+    }
+    
+    if (line.trim().startsWith('- ') || line.trim().startsWith('* ')) {
+      return (
+        <li key={index} className="ml-4 text-gray-200" dangerouslySetInnerHTML={{ 
+          __html: line.trim().replace(/^[-*]\s/, '') 
+        }} />
+      );
+    }
+    
+    const numberedMatch = line.trim().match(/^\d+\.\s/);
+    if (numberedMatch) {
+      return (
+        <li key={index} className="ml-4 text-gray-200" dangerouslySetInnerHTML={{ 
+          __html: line.trim().replace(/^\d+\.\s/, '') 
+        }} />
+      );
+    }
+    
+    if (line.trim()) {
+      return <p key={index} className="text-gray-200 mb-2 leading-relaxed" dangerouslySetInnerHTML={{ __html: line }} />;
+    }
+    
+    return null;
+  };
+
+  return (
+    <div className="prose prose-invert max-w-none">
+      {paragraphs.map((paragraph, pIndex) => {
+        const lines = paragraph.split('\n');
+        
+        const isBulletList = lines.some(l => l.trim().startsWith('- ') || l.trim().startsWith('* '));
+        const isNumberedList = lines.some(l => /^\d+\.\s/.test(l.trim()));
+        
+        if (isBulletList) {
+          return (
+            <ul key={pIndex} className="list-disc ml-6 mb-4 space-y-1">
+              {lines.map((line, lIndex) => renderLine(line, `${pIndex}-${lIndex}`))}
+            </ul>
+          );
+        }
+        
+        if (isNumberedList) {
+          return (
+            <ol key={pIndex} className="list-decimal ml-6 mb-4 space-y-1">
+              {lines.map((line, lIndex) => renderLine(line, `${pIndex}-${lIndex}`))}
+            </ol>
+          );
+        }
+        
+        return (
+          <div key={pIndex} className="mb-4">
+            {lines.map((line, lIndex) => renderLine(line, `${pIndex}-${lIndex}`))}
+          </div>
+        );
+      })}
+    </div>
+  );
+};
 
 function highlightText(text) {
   if (!text || typeof text !== "string") return "";
@@ -58,14 +142,12 @@ function highlightText(text) {
     }
   });
 }
-
 export default function Results() {
   const location = useLocation();
   const navigate = useNavigate();
-  const { analysisId } = useParams(); // Get analysisId from URL if present
+  const { analysisId } = useParams();
   const { currentUser } = useAuth();
   
-  // State from navigation or loaded from Firestore
   const [analysis, setAnalysis] = useState(location.state?.analysis || null);
   const [analysisType, setAnalysisType] = useState(location.state?.analysisType || null);
   const [loading, setLoading] = useState(false);
@@ -85,8 +167,12 @@ export default function Results() {
   const [emailSending, setEmailSending] = useState(false);
   const [emailSent, setEmailSent] = useState(false);
   const [expandedClauses, setExpandedClauses] = useState({});
+  
+  // Translation states
+  const [selectedLanguage, setSelectedLanguage] = useState('en');
+  const [translatedContent, setTranslatedContent] = useState(null);
+  const [translationLoading, setTranslationLoading] = useState(false);
 
-  // Load analysis from Firestore if analysisId is in URL
   useEffect(() => {
     if (analysisId && currentUser && !analysis) {
       loadAnalysisFromFirestore();
@@ -98,7 +184,6 @@ export default function Results() {
       setLoading(true);
       const analysisData = await getAnalysisById(analysisId, currentUser.uid);
       
-      // Transform Firestore data to match expected format
       const transformedAnalysis = {
         filename: analysisData.originalFilename,
         file_type: analysisData.fileType,
@@ -130,40 +215,136 @@ export default function Results() {
     if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
   }, [chatHistory]);
 
-  if (loading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] flex items-center justify-center">
-        <div className="text-center">
-          <Loader2 className="w-16 h-16 text-cyan-400 animate-spin mx-auto mb-4" />
-          <p className="text-gray-300 text-lg">Loading analysis...</p>
-        </div>
-      </div>
-    );
+  // Translation handler
+  // ============================================
+// REPLACE your handleLanguageChange function in Results.jsx
+// ============================================
+// Fixed handleLanguageChange function
+const handleLanguageChange = async (languageCode) => {
+  if (languageCode === 'en') {
+    setSelectedLanguage('en');
+    setTranslatedContent(null);
+    return;
   }
 
-  if (!analysis) {
-    return (
-      <div className="min-h-screen bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] flex items-center justify-center">
-        <div className="text-center">
-          <AlertTriangle className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
-          <h2 className="text-2xl font-bold text-white mb-4">No Analysis Data</h2>
-          <div className="flex gap-4 justify-center">
-            <Button onClick={() => navigate("/upload")} className="bg-cyan-600">
-              Analyze New Document
-            </Button>
-            <Button onClick={() => navigate("/dashboard")} variant="outline" className="border-cyan-400 text-cyan-400">
-              Go to Dashboard
-            </Button>
-          </div>
-        </div>
-      </div>
-    );
+  if (!analysisId) {
+    console.warn('⚠ No analysisId available');
+    alert('This analysis needs to be saved before translation. Please refresh and try again.');
+    return;
   }
 
-  // Check if this is detailed analysis
-  const isDetailedAnalysis = analysisType === "detailed" || (analysis.clauses && Array.isArray(analysis.clauses));
+  if (!currentUser) {
+    console.error('❌ No user authenticated');
+    alert('Please login to use translation feature');
+    return;
+  }
 
-  // Toggle clause expansion
+  setTranslationLoading(true);
+  setSelectedLanguage(languageCode);
+
+  try {
+    console.log('🔍 Starting translation process...', {
+      analysisId,
+      language: languageCode,
+      userId: currentUser.uid
+    });
+
+    let translation = null;
+    
+    try {
+      translation = await getTranslation(analysisId, languageCode);
+      
+      if (translation && typeof translation === 'object') {
+        console.log('✅ Found cached translation:', translation);
+        setTranslatedContent(translation);
+        setTranslationLoading(false);
+        return;
+      }
+    } catch (error) {
+      console.log('📝 No cached translation found, requesting new one...');
+    }
+
+    console.log('🔄 Requesting new translation from backend...');
+    translation = await requestTranslation(analysisId, languageCode, currentUser.uid);
+
+    console.log('📦 Backend response:', translation);
+
+    if (!translation) {
+      throw new Error('Backend returned null or undefined');
+    }
+
+    if (typeof translation !== 'object') {
+      throw new Error(`Invalid translation format: expected object, got ${typeof translation}`);
+    }
+
+    const hasRequiredFields = translation.summary || translation.risks || translation.clauses;
+    
+    if (!hasRequiredFields) {
+      console.error('❌ Translation missing required fields:', translation);
+      throw new Error('Translation is missing required content (summary, risks, or clauses)');
+    }
+
+    setTranslatedContent(translation);
+    console.log('✅ Translation loaded successfully:', languageCode);
+    
+  } catch (error) {
+    console.error('❌ Translation error:', error);
+    console.error('Error stack:', error.stack);
+    
+    let errorMessage = 'Failed to translate content. ';
+    
+    if (error.message.includes('Analysis not found')) {
+      errorMessage += 'Document not found in database. Try re-analyzing the document.';
+    } else if (error.message.includes('Unauthorized')) {
+      errorMessage += 'You do not have permission to access this document.';
+    } else if (error.message.includes('Firestore not configured')) {
+      errorMessage += 'Translation service not available. Please contact support.';
+    } else if (error.message.includes('Backend returned null')) {
+      errorMessage += 'Backend did not return translation data. This might be a server issue. Please try again or contact support.';
+    } else if (error.message.includes('Invalid translation format')) {
+      errorMessage += 'Received invalid data from server. Please try again.';
+    } else if (error.message.includes('missing required content')) {
+      errorMessage += 'Translation data is incomplete. Please try again or contact support.';
+    } else {
+      errorMessage += error.message || 'Please try again.';
+    }
+    
+    alert(errorMessage);
+    setSelectedLanguage('en');
+    setTranslatedContent(null);
+  } finally {
+    setTranslationLoading(false);
+  }
+};
+// Get displayed content based on selected language
+  // Get displayed content based on selected language
+  const getDisplayedContent = () => {
+    // Show loading state - return empty during translation
+    if (translationLoading) {
+      return {
+        summary: "",
+        risks: [],
+        clauses: [],
+        suggestions: []
+      };
+    }
+
+    if (selectedLanguage === 'en' || !translatedContent) {
+      return {
+        summary: analysis.summary || "",
+        risks: analysis.risks || [],
+        clauses: analysis.clauses || [],
+        suggestions: analysis.suggestions || []
+      };
+    }
+
+    return {
+      summary: translatedContent.summary || analysis.summary || "",
+      risks: translatedContent.risks || analysis.risks || [],
+      clauses: translatedContent.clauses || analysis.clauses || [],
+      suggestions: translatedContent.suggestions || analysis.suggestions || []
+    };
+  };
   const toggleClause = (index) => {
     setExpandedClauses(prev => ({
       ...prev,
@@ -171,53 +352,49 @@ export default function Results() {
     }));
   };
 
-// Handle Chat with Document Context
-const handleSendMessage = async () => {
-  if (!chatMessage.trim()) return;
+  const handleSendMessage = async () => {
+    if (!chatMessage.trim()) return;
 
-  const userMessage = chatMessage.trim();
-  setChatMessage("");
-  setChatLoading(true);
+    const userMessage = chatMessage.trim();
+    setChatMessage("");
+    setChatLoading(true);
 
-  setChatHistory((prev) => [...prev, { role: "user", content: userMessage }]);
+    setChatHistory((prev) => [...prev, { role: "user", content: userMessage }]);
 
-  try {
-    // ✅ FIX: Use correct field names based on analysis type
-    const documentText = analysis.redacted_text || analysis.redacted_document_text || "";
-    
-    // ✅ ADD: Check if document text exists
-    if (!documentText) {
-      throw new Error("Document text not available");
+    try {
+      const documentText = analysis.redacted_text || analysis.redacted_document_text || "";
+      
+      if (!documentText) {
+        throw new Error("Document text not available");
+      }
+
+      const res = await fetch("http://localhost:8000/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          message: userMessage,
+          document_text: documentText,
+        }),
+      });
+
+      const data = await res.json();
+      setChatHistory((prev) => [
+        ...prev,
+        { role: "assistant", content: data.reply || "No response received." },
+      ]);
+    } catch (error) {
+      console.error(error);
+      setChatHistory((prev) => [
+        ...prev,
+        { role: "assistant", content: error.message === "Document text not available" 
+          ? "❌ Document text not available. Please re-analyze the document." 
+          : "❌ Error communicating with the server." },
+      ]);
+    } finally {
+      setChatLoading(false);
     }
+  };
 
-    const res = await fetch("http://localhost:8000/chat", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        message: userMessage,
-        document_text: documentText,
-      }),
-    });
-
-    const data = await res.json();
-    setChatHistory((prev) => [
-      ...prev,
-      { role: "assistant", content: data.reply || "No response received." },
-    ]);
-  } catch (error) {
-    console.error(error);
-    setChatHistory((prev) => [
-      ...prev,
-      { role: "assistant", content: error.message === "Document text not available" 
-        ? "❌ Document text not available. Please re-analyze the document." 
-        : "❌ Error communicating with the server." },
-    ]);
-  } finally {
-    setChatLoading(false);
-  }
-};
-
-  // Handle Negotiation Email Generation
   const handleGenerateNegotiation = async (clauseText) => {
     setSelectedClauseForNegotiation(clauseText);
     setNegotiationLoading(true);
@@ -240,14 +417,12 @@ const handleSendMessage = async () => {
     }
   };
 
-  // Copy Email to Clipboard
   const handleCopyEmail = () => {
     navigator.clipboard.writeText(negotiationEmail);
     setCopiedEmail(true);
     setTimeout(() => setCopiedEmail(false), 2000);
   };
 
-  // Open Gmail with pre-filled negotiation email
   const handleDraftInGmail = () => {
     if (!negotiationEmail) return;
     
@@ -258,14 +433,12 @@ const handleSendMessage = async () => {
     window.open(gmailUrl, '_blank');
   };
 
-  // Close Negotiation Modal
   const handleCloseNegotiation = () => {
     setSelectedClauseForNegotiation(null);
     setNegotiationEmail("");
     setCopiedEmail(false);
   };
 
-  // Handle Document Email Generation - Generate email preview first
   const handleGenerateDocumentEmail = async () => {
     setShowDocumentEmail(true);
     setDocumentEmailLoading(true);
@@ -273,20 +446,20 @@ const handleSendMessage = async () => {
     setEmailSent(false);
 
     try {
+      const displayedContent = getDisplayedContent();
       let documentText = "";
       let riskSummary = "";
       
       if (isDetailedAnalysis) {
-        const clauses = analysis.clauses || [];
-        documentText = analysis.summary || "Detailed clause analysis completed";
+        const clauses = displayedContent.clauses || [];
+        documentText = displayedContent.summary || "Detailed clause analysis completed";
         riskSummary = `Found ${clauses.length} risky clauses requiring attention.`;
       } else {
-        const risks = analysis.risks || [];
-        documentText = analysis.summary || "";
+        const risks = displayedContent.risks || [];
+        documentText = displayedContent.summary || "";
         riskSummary = `Identified ${risks.length} potential risks in the document.`;
       }
 
-      // Generate email preview using existing endpoint
       const res = await fetch("http://localhost:8000/draft-document-email", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -306,7 +479,6 @@ const handleSendMessage = async () => {
     }
   };
 
-  // Send Document Email as PDF
   const handleSendDocumentEmail = async () => {
     if (!userEmail || !userEmail.includes('@')) {
       alert('Please enter a valid email address');
@@ -317,22 +489,23 @@ const handleSendMessage = async () => {
     setEmailSent(false);
 
     try {
+      const displayedContent = getDisplayedContent();
       let clauses = [];
       let documentText = "";
       let riskSummary = "";
       
       if (isDetailedAnalysis) {
-        clauses = analysis.clauses || [];
-        documentText = analysis.summary || "Detailed clause analysis completed";
+        clauses = displayedContent.clauses || [];
+        documentText = displayedContent.summary || "Detailed clause analysis completed";
         riskSummary = `Found ${clauses.length} risky clauses requiring attention.`;
       } else {
-        const risks = analysis.risks || [];
+        const risks = displayedContent.risks || [];
         clauses = risks.map(r => ({
           clause: r.clause_text,
           risk: r.severity,
           explanation: r.risk_explanation
         }));
-        documentText = analysis.summary || "";
+        documentText = displayedContent.summary || "";
         riskSummary = `Identified ${risks.length} potential risks in the document.`;
       }
 
@@ -368,21 +541,18 @@ const handleSendMessage = async () => {
     }
   };
 
-  // Copy Document Email to Clipboard
   const handleCopyDocumentEmail = () => {
     navigator.clipboard.writeText(documentEmail);
     setCopiedDocumentEmail(true);
     setTimeout(() => setCopiedDocumentEmail(false), 2000);
   };
 
-  // Close Document Email Modal
   const handleCloseDocumentEmail = () => {
     setShowDocumentEmail(false);
     setDocumentEmail("");
     setCopiedDocumentEmail(false);
   };
 
-  // Get risk level badge styling
   const getRiskBadge = (level) => {
     const styles = {
       High: "bg-red-500/20 text-red-400 border-red-500/50",
@@ -392,9 +562,53 @@ const handleSendMessage = async () => {
     return styles[level] || styles.Medium;
   };
 
+  const getLanguageName = (code) => {
+    const names = {
+      'hi': 'Hindi',
+      'es': 'Spanish',
+      'fr': 'French',
+      'de': 'German',
+      'zh': 'Chinese'
+    };
+    return names[code] || code;
+  };
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-16 h-16 text-cyan-400 animate-spin mx-auto mb-4" />
+          <p className="text-gray-300 text-lg">Loading analysis...</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!analysis) {
+    return (
+      <div className="min-h-screen bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] flex items-center justify-center">
+        <div className="text-center">
+          <AlertTriangle className="w-16 h-16 text-yellow-400 mx-auto mb-4" />
+          <h2 className="text-2xl font-bold text-white mb-4">No Analysis Data</h2>
+          <div className="flex gap-4 justify-center">
+            <Button onClick={() => navigate("/upload")} className="bg-cyan-600">
+              Analyze New Document
+            </Button>
+            <Button onClick={() => navigate("/dashboard")} variant="outline" className="border-cyan-400 text-cyan-400">
+              Go to Dashboard
+            </Button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  const isDetailedAnalysis = analysisType === "detailed" || (analysis.clauses && Array.isArray(analysis.clauses));
+  const displayedContent = getDisplayedContent();
+  
   // Render Detailed Clause Analysis View
   if (isDetailedAnalysis) {
-    const clauses = analysis.clauses || [];
+    const clauses = displayedContent.clauses || [];
     const totalClauses = analysis.total_risky_clauses || clauses.length;
     const fileType = analysis.file_type || "Text";
 
@@ -403,11 +617,11 @@ const handleSendMessage = async () => {
         <div className="absolute inset-0 aurora-bg opacity-20" />
 
         <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          {/* Header */}
+          {/* Header with Language Selector */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
-            className="flex items-center justify-between mb-8"
+            className="flex items-center justify-between mb-8 flex-wrap gap-4"
           >
             <Button
               onClick={() => navigate("/upload")}
@@ -417,13 +631,22 @@ const handleSendMessage = async () => {
               <ArrowLeft className="w-4 h-4 mr-2" />
               New Analysis
             </Button>
-            <div className="text-right">
-              <h1 className="text-3xl font-bold text-white mb-1">
-                Detailed Clause Analysis
-              </h1>
-              <p className="text-gray-300 text-sm">
-                {analysis.filename} • {totalClauses} risky clause{totalClauses !== 1 ? "s" : ""} found
-              </p>
+            
+            <div className="flex items-center gap-4">
+              <LanguageSelector
+                selectedLanguage={selectedLanguage}
+                onLanguageChange={handleLanguageChange}
+                loading={translationLoading}
+              />
+              
+              <div className="text-right">
+                <h1 className="text-3xl font-bold text-white mb-1">
+                  Detailed Clause Analysis
+                </h1>
+                <p className="text-gray-300 text-sm">
+                  {analysis.filename} • {totalClauses} risk{totalClauses !== 1 ? "s" : ""} identified
+                </p>
+              </div>
             </div>
           </motion.div>
 
@@ -437,6 +660,19 @@ const handleSendMessage = async () => {
             >
               <CheckCircle className="w-5 h-5 stroke-current flex-shrink-0" />
               <span>{analysis.privacy_notice}</span>
+            </motion.div>
+          )}
+
+          {/* Translation Indicator */}
+          {selectedLanguage !== 'en' && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.06 }}
+              className="mb-6 px-4 py-3 bg-blue-700/70 text-blue-100 rounded-lg font-medium text-sm flex items-center gap-2"
+            >
+              <Globe className="w-5 h-5 stroke-current flex-shrink-0" />
+              <span>Content translated to {getLanguageName(selectedLanguage)}</span>
             </motion.div>
           )}
 
@@ -499,11 +735,10 @@ const handleSendMessage = async () => {
                       transition={{ delay: 0.2 + index * 0.05 }}
                     >
                       <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-xl hover:shadow-2xl transition-all overflow-hidden">
-                        {/* Collapsed Header - Always Visible */}
                         <div
-                            onClick={() => toggleClause(index)}
-                            className="cursor-pointer hover:bg-cyan-700/40 transition-colors"
-                          >
+                          onClick={() => toggleClause(index)}
+                          className="cursor-pointer hover:bg-cyan-700/40 transition-colors"
+                        >
                           <CardHeader className="border-b border-gray-700/50 p-6">
                             <div className="flex items-start justify-between gap-4">
                               <div className="flex-1">
@@ -534,7 +769,6 @@ const handleSendMessage = async () => {
                           </CardHeader>
                         </div>
 
-                        {/* Expandable Content */}
                         <AnimatePresence>
                           {expandedClauses[index] && (
                             <motion.div
@@ -544,7 +778,6 @@ const handleSendMessage = async () => {
                               transition={{ duration: 0.3 }}
                             >
                               <CardContent className="p-6 space-y-6">
-                                {/* Impact Section */}
                                 <div className="bg-red-900/20 border border-red-500/30 rounded-lg p-4">
                                   <div className="flex items-start gap-3">
                                     <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
@@ -559,7 +792,6 @@ const handleSendMessage = async () => {
                                   </div>
                                 </div>
 
-                                {/* Explanation Section */}
                                 <div className="bg-blue-900/20 border border-blue-500/30 rounded-lg p-4">
                                   <div className="flex items-start gap-3">
                                     <FileText className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
@@ -574,7 +806,6 @@ const handleSendMessage = async () => {
                                   </div>
                                 </div>
 
-                                {/* Recommendation Section */}
                                 <div className="bg-emerald-900/20 border border-emerald-500/30 rounded-lg p-4">
                                   <div className="flex items-start gap-3">
                                     <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
@@ -589,7 +820,6 @@ const handleSendMessage = async () => {
                                   </div>
                                 </div>
 
-                                {/* Negotiation Button */}
                                 <div className="pt-2">
                                   <Button
                                     onClick={(e) => {
@@ -630,7 +860,6 @@ const handleSendMessage = async () => {
 
             {/* Sidebar - Right Side */}
             <div className="space-y-6">
-              {/* Analysis Status */}
               <motion.div
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -669,7 +898,6 @@ const handleSendMessage = async () => {
                 </Card>
               </motion.div>
 
-              {/* Quick Stats */}
               <motion.div
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -709,7 +937,6 @@ const handleSendMessage = async () => {
                 </Card>
               </motion.div>
 
-              {/* Key Responsibilities */}
               <motion.div
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -743,7 +970,6 @@ const handleSendMessage = async () => {
                 </Card>
               </motion.div>
 
-              {/* Document Email Generation */}
               <motion.div
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -771,7 +997,6 @@ const handleSendMessage = async () => {
                 </Card>
               </motion.div>
 
-              {/* Chat Section */}
               <motion.div
                 initial={{ opacity: 0, x: 20 }}
                 animate={{ opacity: 1, x: 0 }}
@@ -831,7 +1056,6 @@ const handleSendMessage = async () => {
                 </Card>
               </motion.div>
 
-              {/* Back Button */}
               <Button
                 onClick={() => navigate("/upload")}
                 className="w-full bg-cyan-600 hover:bg-cyan-500 text-white py-3"
@@ -962,7 +1186,6 @@ const handleSendMessage = async () => {
                       </pre>
                     </div>
 
-                    {/* Email Input Field */}
                     <div className="mb-4">
                       <label className="block text-gray-300 text-sm font-medium mb-2">
                         Your Email Address
@@ -1038,11 +1261,10 @@ const handleSendMessage = async () => {
     );
   }
 
-
-// Render Standard Analysis View
-  const summary = analysis.summary || "No summary available.";
-  const risks = analysis.risks || [];
-  const suggestions = analysis.suggestions || [];
+  // Render Standard Analysis View
+  const summary = displayedContent.summary;
+  const risks = displayedContent.risks;
+  const suggestions = displayedContent.suggestions;
   const fairnessAnalysis = analysis.fairness_analysis || [];
   const fileType = analysis.file_type || "Text";
 
@@ -1051,11 +1273,11 @@ const handleSendMessage = async () => {
       <div className="absolute inset-0 aurora-bg opacity-20" />
 
       <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
+        {/* Header with Language Selector */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="flex items-center justify-between mb-8"
+          className="flex items-center justify-between mb-8 flex-wrap gap-4"
         >
           <Button
             onClick={() => navigate("/upload")}
@@ -1065,13 +1287,22 @@ const handleSendMessage = async () => {
             <ArrowLeft className="w-4 h-4 mr-2" />
             New Analysis
           </Button>
-          <div className="text-right">
-            <h1 className="text-3xl font-bold text-white mb-1">
-              Standard Analysis Results
-            </h1>
-            <p className="text-gray-300 text-sm">
-              {analysis.filename || "Document"} • {risks.length} risk{risks.length !== 1 ? "s" : ""} identified
-            </p>
+          
+          <div className="flex items-center gap-4">
+            <LanguageSelector
+              selectedLanguage={selectedLanguage}
+              onLanguageChange={handleLanguageChange}
+              loading={translationLoading}
+            />
+            
+            <div className="text-right">
+              <h1 className="text-3xl font-bold text-white mb-1">
+                Standard Analysis Results
+              </h1>
+              <p className="text-gray-300 text-sm">
+                {analysis.filename || "Document"} • {risks.length} risk{risks.length !== 1 ? "s" : ""} identified
+              </p>
+            </div>
           </div>
         </motion.div>
 
@@ -1088,32 +1319,41 @@ const handleSendMessage = async () => {
           </motion.div>
         )}
 
+        {/* Translation Indicator */}
+        {selectedLanguage !== 'en' && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.06 }}
+            className="mb-6 px-4 py-3 bg-blue-700/70 text-blue-100 rounded-lg font-medium text-sm flex items-center gap-2"
+          >
+            <Globe className="w-5 h-5 stroke-current flex-shrink-0" />
+            <span>Content translated to {getLanguageName(selectedLanguage)}</span>
+          </motion.div>
+        )}
+
         <div className="grid lg:grid-cols-3 gap-8">
           {/* Main Content - Left Side */}
           <div className="lg:col-span-2 space-y-6">
             {/* Summary Card */}
-            <motion.div
-              initial={{ opacity: 0, y: 20 }}
-              animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.1 }}
-            >
-              <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
-                <CardHeader className="border-b border-gray-700/50">
-                  <CardTitle className="flex items-center gap-2 text-white">
-                    <FileText className="w-5 h-5 text-cyan-400" />
-                    Document Summary
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="p-6">
-                  <div className="prose prose-invert max-w-none">
-                    <p className="text-gray-200 whitespace-pre-line leading-relaxed">
-                      {highlightText(summary)}
-                    </p>
-                  </div>
-                </CardContent>
-              </Card>
-            </motion.div>
-
+            {/* Summary Card */}
+<motion.div
+  initial={{ opacity: 0, y: 20 }}
+  animate={{ opacity: 1, y: 0 }}
+  transition={{ delay: 0.1 }}
+>
+  <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+    <CardHeader className="border-b border-gray-700/50">
+      <CardTitle className="flex items-center gap-2 text-white">
+        <FileText className="w-5 h-5 text-cyan-400" />
+        Document Summary
+      </CardTitle>
+    </CardHeader>
+    <CardContent className="p-6">
+      <MarkdownRenderer text={summary} />
+    </CardContent>
+  </Card>
+</motion.div>
             {/* Risks Card */}
             <motion.div
               initial={{ opacity: 0, y: 20 }}
@@ -1160,7 +1400,6 @@ const handleSendMessage = async () => {
                             </div>
                           </div>
                           
-                          {/* Negotiation Button */}
                           <Button
                             onClick={() => handleGenerateNegotiation(risk.clause_text)}
                             size="sm"
@@ -1276,7 +1515,6 @@ const handleSendMessage = async () => {
 
           {/* Sidebar - Right Side */}
           <div className="space-y-6">
-            {/* Analysis Status */}
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -1315,7 +1553,6 @@ const handleSendMessage = async () => {
               </Card>
             </motion.div>
 
-            {/* Quick Stats */}
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -1353,7 +1590,6 @@ const handleSendMessage = async () => {
               </Card>
             </motion.div>
 
-            {/* Key Responsibilities */}
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -1387,7 +1623,6 @@ const handleSendMessage = async () => {
               </Card>
             </motion.div>
 
-            {/* Document Email Generation */}
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -1415,7 +1650,6 @@ const handleSendMessage = async () => {
               </Card>
             </motion.div>
 
-            {/* Chat Section */}
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
@@ -1475,7 +1709,6 @@ const handleSendMessage = async () => {
               </Card>
             </motion.div>
 
-            {/* Back Button */}
             <Button
               onClick={() => navigate("/upload")}
               className="w-full bg-cyan-600 hover:bg-cyan-500 text-white py-3"

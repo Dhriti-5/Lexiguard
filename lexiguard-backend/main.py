@@ -128,6 +128,206 @@ info_type_transformations = dlp_types.InfoTypeTransformations(
 DEIDENTIFY_CONFIG = dlp_types.DeidentifyConfig(
     info_type_transformations=info_type_transformations
 )
+# --- 5B. TRANSLATION FEATURE (Firestore + Translation Support) ---
+
+from fastapi import Query, Header
+from google.cloud import firestore
+from translation_utils import (
+    SUPPORTED_LANGUAGES,
+    translate_analysis_content,
+    translate_negotiation_email
+)
+
+# Initialize Firestore client for translations
+try:
+    firestore_client = firestore.Client()
+    logger.info("✅ Firestore client initialized for translations")
+except Exception as e:
+    logger.warning(f"⚠️ Firestore client initialization failed: {e}")
+    firestore_client = None
+
+
+@app.get("/supported-languages")
+async def get_supported_languages():
+    """Return the list of supported translation languages with categories"""
+    from translation_utils import get_language_categories
+    
+    categories = get_language_categories()
+    
+    # Create a simpler structure for frontend
+    languages_by_category = {}
+    for category, codes in categories.items():
+        languages_by_category[category] = [
+            {"code": code, "name": SUPPORTED_LANGUAGES.get(code, code)}
+            for code in codes
+            if code in SUPPORTED_LANGUAGES
+        ]
+    
+    return {
+        "total_languages": len(SUPPORTED_LANGUAGES),
+        "languages": [
+            {"code": code, "name": name} 
+            for code, name in SUPPORTED_LANGUAGES.items()
+        ],
+        "categories": languages_by_category
+    }
+
+@app.get("/language-categories")
+async def get_language_categories():
+    """Return language categories dynamically grouped"""
+    language_categories = {
+        "Asian": {k: v for k, v in SUPPORTED_LANGUAGES.items() if k in ["zh", "ja", "ko"]},
+        "European": {k: v for k, v in SUPPORTED_LANGUAGES.items() if k in ["fr", "de", "it", "pt", "nl", "ru"]},
+        "Indian": {k: v for k, v in SUPPORTED_LANGUAGES.items() if k in ["hi", "ta", "te", "bn", "ml"]},
+        "Others": {k: v for k, v in SUPPORTED_LANGUAGES.items() if k not in ["zh", "ja", "ko", "fr", "de", "it", "pt", "nl", "ru", "hi", "ta", "te", "bn", "ml"]},
+    }
+    return {"categories": language_categories}
+
+# REPLACE your existing /translate/{analysis_id} endpoint with this:
+@app.post("/translate/{analysis_id}")
+async def translate_analysis(
+    analysis_id: str,
+    language: str = Query(..., description="Target language code"),
+    user_id: str = Query(..., description="User ID for authorization")
+):
+    """
+    Translate an existing analysis result (summary + risks + clauses)
+    into the requested target language using Google Cloud Translation API.
+    """
+    logger.info(f"🔄 Translation request: {analysis_id} -> {language} (user: {user_id})")
+    
+    if not firestore_client:
+        logger.error("❌ Firestore not initialized")
+        raise HTTPException(status_code=500, detail="Firestore not initialized")
+    
+    if language not in SUPPORTED_LANGUAGES:
+        logger.error(f"❌ Unsupported language: {language}")
+        available = ", ".join(list(SUPPORTED_LANGUAGES.keys())[:10])
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Unsupported language: {language}. Available: {available}..."
+        )
+
+    try:
+        # Fetch analysis from Firestore
+        doc_ref = firestore_client.collection("userAnalyses").document(analysis_id)
+        doc = doc_ref.get()
+        
+        if not doc.exists:
+            logger.error(f"❌ Analysis not found: {analysis_id}")
+            raise HTTPException(status_code=404, detail="Analysis not found")
+
+        analysis_data = doc.to_dict()
+        
+        # Security check - verify user owns this analysis
+        if analysis_data.get("userID") != user_id:
+            logger.error(f"❌ Unauthorized access attempt by {user_id}")
+            raise HTTPException(status_code=403, detail="Unauthorized access to this analysis")
+        
+        logger.info(f"✅ Analysis found, checking for cached translation...")
+        existing_translations = analysis_data.get("translations", {})
+
+        # If already translated, return cached version
+        if language in existing_translations:
+            logger.info(f"✅ Found cached translation for {language}")
+            cached = existing_translations[language]
+            
+            # Ensure we return the correct structure
+            response = {
+                "language": language,
+                "language_name": SUPPORTED_LANGUAGES.get(language, language),
+                "translated_content": {
+                    "summary": cached.get("summary", ""),
+                    "risks": cached.get("risks", []),
+                    "clauses": cached.get("clauses", []),
+                    "suggestions": cached.get("suggestions", [])
+                }
+            }
+            logger.info(f"📦 Returning cached translation with {len(str(response))} bytes")
+            return response
+
+        logger.info(f"🔄 No cache found, generating new translation for {language}")
+
+        # Use the translate_analysis_content function from translation_utils
+        translated_content = translate_analysis_content(analysis_data, language)
+        
+        logger.info(f"✅ Translation completed: {translated_content.keys()}")
+        
+        # Validate that translation has content
+        has_content = (
+            translated_content.get("summary") or 
+            translated_content.get("risks") or 
+            translated_content.get("clauses")
+        )
+        
+        if not has_content:
+            logger.error(f"❌ Translation returned empty content")
+            logger.error(f"Translation keys: {translated_content.keys()}")
+            raise HTTPException(
+                status_code=500, 
+                detail="Translation completed but returned empty content"
+            )
+
+        # Save translation to Firestore for caching
+        try:
+            existing_translations[language] = translated_content
+            doc_ref.update({"translations": existing_translations})
+            logger.info(f"✅ Translation cached in Firestore for {language}")
+        except Exception as e:
+            logger.warning(f"⚠️ Failed to cache translation: {e}")
+            # Continue even if caching fails
+
+        logger.info(f"✅ Translation completed successfully for {language}")
+        
+        response = {
+            "language": language,
+            "language_name": SUPPORTED_LANGUAGES.get(language, language),
+            "translated_content": translated_content
+        }
+        
+        logger.info(f"📦 Returning new translation with {len(str(response))} bytes")
+        return response
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Translation failed for {analysis_id}: {e}")
+        logger.error(f"❌ Error type: {type(e).__name__}")
+        logger.error(f"❌ Error details: {str(e)}")
+        import traceback
+        logger.error(f"❌ Traceback: {traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Translation failed: {str(e)}")
+
+
+
+
+
+
+
+@app.get("/translation-stats/{analysis_id}")
+async def translation_stats(analysis_id: str):
+    """Return translation availability stats for a given analysis"""
+    if not firestore_client:
+        raise HTTPException(status_code=500, detail="Firestore not initialized")
+
+    try:
+        doc_ref = firestore_client.collection("userAnalyses").document(analysis_id)
+        doc = doc_ref.get()
+        if not doc.exists:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+
+        data = doc.to_dict()
+        available_languages = list(data.get("translations", {}).keys())
+        remaining = max(0, len(SUPPORTED_LANGUAGES) - len(available_languages))
+
+        return {
+            "analysis_id": analysis_id,
+            "available_translations": available_languages,
+            "remaining_languages": remaining,
+        }
+    except Exception as e:
+        logger.error(f"Error getting translation stats: {e}")
+        raise HTTPException(status_code=500, detail="Failed to retrieve stats")
 
 # --- 6. DATA MODELS ---
 class DocumentRequest(BaseModel):

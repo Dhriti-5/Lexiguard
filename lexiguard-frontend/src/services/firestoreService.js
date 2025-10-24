@@ -337,3 +337,163 @@ export const getAnalysisStats = async (userId) => {
     };
   }
 };
+// ============================================
+// ADD THESE FUNCTIONS TO firestoreService.js
+// ============================================
+// At the end of your firestoreService.js, REPLACE the translation functions with these:
+
+/**
+ * Get translated content for an analysis
+ * @param {string} analysisId - Document ID
+ * @param {string} language - Language code (hi, es, fr)
+ * @returns {Promise<object|null>} - Translated content or null
+ */
+export const getTranslation = async (analysisId, language) => {
+  try {
+    if (!db) {
+      console.warn('⚠️ Firestore not configured');
+      return null;
+    }
+
+    console.log(`🔍 Checking Firestore for ${language} translation of ${analysisId}`);
+    
+    const docRef = doc(db, COLLECTION_NAME, analysisId);
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) {
+      console.error('❌ Analysis not found in Firestore');
+      throw new Error('Analysis not found');
+    }
+    
+    const data = docSnap.data();
+    const translations = data.translations || {};
+    
+    if (translations[language]) {
+      console.log(`✅ Cached translation found for ${language}`);
+      return translations[language];
+    }
+    
+    console.log(`📝 No cached translation found for ${language}`);
+    return null;
+  } catch (error) {
+    console.error('❌ Error fetching translation from Firestore:', error);
+    return null; // Return null to allow fallback to API
+  }
+};
+
+/**
+ * Request translation from backend and save to Firestore
+ * @param {string} analysisId - Document ID
+ * @param {string} language - Language code
+ * @param {string} userId - Firebase Auth user ID
+ * @returns {Promise<object>} - Translated content
+ */
+export const requestTranslation = async (analysisId, language, userId) => {
+  try {
+    console.log(`🔄 Requesting translation to ${language}`, {
+      analysisId,
+      language,
+      userId
+    });
+    
+    // Build URL with query parameters (matching your backend)
+    const url = `http://localhost:8000/translate/${analysisId}?language=${language}&user_id=${userId}`;
+    console.log('📡 API URL:', url);
+    
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+    });
+    
+    console.log('📡 Response status:', response.status);
+    console.log('📡 Response ok:', response.ok);
+    
+    if (!response.ok) {
+      let errorMessage;
+      try {
+        const errorData = await response.json();
+        errorMessage = errorData.detail || errorData.message || 'Unknown error';
+        console.error('❌ Backend error data:', errorData);
+      } catch {
+        errorMessage = await response.text();
+        console.error('❌ Backend error text:', errorMessage);
+      }
+      throw new Error(`Backend error: ${response.status} - ${errorMessage}`);
+    }
+    
+    const data = await response.json();
+    console.log('📦 Full backend response:', JSON.stringify(data, null, 2));
+    
+    // Validate response structure
+    if (!data) {
+      throw new Error('Backend returned empty response');
+    }
+    
+    // Check if backend returned an error
+    if (data.error) {
+      throw new Error(data.error);
+    }
+    
+    // Extract translation - your backend returns { translated_content: {...} }
+    const translation = data.translated_content || data.translation || data;
+    console.log('📦 Extracted translation:', JSON.stringify(translation, null, 2));
+    
+    if (!translation || typeof translation !== 'object') {
+      console.error('❌ Invalid translation type:', typeof translation);
+      console.error('❌ Translation value:', translation);
+      throw new Error('Invalid translation structure received from backend');
+    }
+    
+    // Validate that translation has content
+    const hasContent = translation.summary || translation.risks || translation.clauses;
+    console.log('📊 Translation content check:', {
+      hasSummary: !!translation.summary,
+      hasRisks: !!translation.risks,
+      hasClauses: !!translation.clauses,
+      hasAnyContent: hasContent
+    });
+    
+    if (!hasContent) {
+      console.error('❌ Translation structure:', Object.keys(translation));
+      throw new Error('Translation data is empty or incomplete');
+    }
+    
+    console.log('✅ Translation validated successfully');
+    return translation;
+    
+  } catch (error) {
+    console.error('❌ requestTranslation failed:', error);
+    console.error('❌ Error stack:', error.stack);
+    throw error;
+  }
+};
+
+/**
+ * Get supported languages for translation
+ * @returns {Promise<Array>} - Array of language objects
+ */
+export const getSupportedLanguages = async () => {
+  try {
+    const response = await fetch('http://localhost:8000/supported-languages');
+    
+    if (!response.ok) {
+      throw new Error('Failed to fetch supported languages');
+    }
+    
+    const data = await response.json();
+    return data.languages;
+  } catch (error) {
+    console.error('❌ Error fetching supported languages:', error);
+    // Return default languages if API fails
+    return [
+      { code: 'en', name: 'English' },
+      { code: 'hi', name: 'Hindi' },
+      { code: 'es', name: 'Spanish' },
+      { code: 'fr', name: 'French' },
+      { code: 'de', name: 'German' },
+      { code: 'zh', name: 'Chinese' },
+    ];
+  }
+};
