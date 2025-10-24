@@ -355,7 +355,7 @@ const handleLanguageChange = async (languageCode) => {
     setTranslationLoading(false);
   }
 };
-// Get displayed content based on selected language
+
   // Get displayed content based on selected language
   const getDisplayedContent = () => {
   // If loading translation, show loading state
