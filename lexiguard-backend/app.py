@@ -476,4 +476,6 @@ def root():
     })
 
 if __name__ == "__main__":
-    app.run(port=8000, debug=True)
+    port = int(os.environ.get("PORT", 8080))  # Google Cloud Run sets PORT to 8080
+    print(f"Starting Flask server on host=0.0.0.0, port={port}")
+    app.run(host="0.0.0.0", port=port, debug=False)  # debug=False for production
