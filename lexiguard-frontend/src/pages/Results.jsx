@@ -158,7 +158,7 @@ const [analysis, setAnalysis] = useState(() => {
   const [analysisType, setAnalysisType] = useState(location.state?.analysisType || null);
   const [loading, setLoading] = useState(false);
 
-   const [chatMessage, setChatMessage] = useState("");
+  const [chatMessage, setChatMessage] = useState("");
   const [chatHistory, setChatHistory] = useState([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [selectedClauseForNegotiation, setSelectedClauseForNegotiation] = useState(null);
@@ -184,6 +184,7 @@ const [analysis, setAnalysis] = useState(() => {
       loadAnalysisFromFirestore();
     }
   }, [analysisId, currentUser]);
+  
   useEffect(() => {
   // Reset to English whenever we load a new analysis
   setSelectedLanguage('en');
@@ -256,9 +257,7 @@ useEffect(() => {
   }, [chatHistory]);
 
   // Translation handler
-  // ============================================
-// REPLACE your handleLanguageChange function in Results.jsx
-// ============================================
+  
 // Fixed handleLanguageChange function
 const handleLanguageChange = async (languageCode) => {
   if (languageCode === 'en') {
