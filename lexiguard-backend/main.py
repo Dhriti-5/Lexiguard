@@ -749,6 +749,6 @@ Respond concisely and clearly for a non-lawyer. If the answer depends entirely o
 # --- RUN SERVER ---
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8080))  # Google Cloud Run sets PORT to 8080
+    port = int(os.environ.get("PORT", 8000))  # Default port 8000 for local development
     logger.info(f"Starting server on host=0.0.0.0, port={port}")
     uvicorn.run("main:app", host="0.0.0.0", port=port, log_level="info")
