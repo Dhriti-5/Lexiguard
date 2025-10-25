@@ -24,6 +24,10 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib.units import inch
 from reportlab.lib import colors
 
+from google.cloud import storage as gcs_storage
+import uuid
+from datetime import datetime
+
 # --- 0. CONFIGURE LOGGING ---
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -154,6 +158,17 @@ except Exception as e:
     logger.warning(f"⚠️ Firestore client initialization failed: {e}")
     firestore_client = None
 
+# Initialize Cloud Storage client for async processing
+try:
+    storage_client_gcs = gcs_storage.Client()
+    logger.info("✅ Google Cloud Storage client initialized for async processing")
+except Exception as e:
+    logger.warning(f"⚠️ Cloud Storage client initialization failed: {e}")
+    storage_client_gcs = None
+
+# Configuration for async processing
+GCS_BUCKET_NAME = os.getenv("GCS_BUCKET_NAME", "lexiguard-documents")
+MAX_FILE_SIZE_MB = 10  # 10MB limit as per your UI
 
 @app.get("/supported-languages")
 async def get_supported_languages():
@@ -1107,6 +1122,255 @@ Respond concisely and clearly for a non-lawyer. If the answer depends entirely o
         logger.error(f"Chat error: {e}")
         answer = f"Error: {str(e)}"
     return {"reply": answer}
+
+@app.post("/analyze-file-async")
+async def analyze_file_async(
+    file: UploadFile = File(...),
+    documentTitle: str = Form(...),
+    analysisType: str = Form("standard"),
+    userId: str = Form(...)  # Get from Firebase Auth on frontend
+):
+    """
+    🚀 NEW ASYNC ENDPOINT for queued processing
+    
+    Uploads file to Cloud Storage and creates a job for background processing.
+    Returns immediately with job ID (non-blocking).
+    
+    Frontend should poll /job-status/{jobId} or use Firestore real-time listener.
+    """
+    try:
+        logger.info(f"📤 Async upload request from user: {userId}")
+        logger.info(f"   Document: {documentTitle}")
+        logger.info(f"   Analysis: {analysisType}")
+        
+        # Validate Cloud Storage client
+        if not storage_client_gcs:
+            raise HTTPException(
+                status_code=503,
+                detail="Cloud Storage not configured. Please set GCS_BUCKET_NAME in environment."
+            )
+        
+        if not firestore_client:
+            raise HTTPException(
+                status_code=503,
+                detail="Firestore not configured for async processing."
+            )
+        
+        # Read file content
+        file_content = await file.read()
+        file_size_mb = len(file_content) / (1024 * 1024)
+        
+        # Validate file size
+        if file_size_mb > MAX_FILE_SIZE_MB:
+            raise HTTPException(
+                status_code=400,
+                detail=f"File size ({file_size_mb:.2f}MB) exceeds {MAX_FILE_SIZE_MB}MB limit"
+            )
+        
+        # Validate file type
+        filename_lower = file.filename.lower()
+        if not (filename_lower.endswith('.pdf') or 
+                filename_lower.endswith('.docx') or 
+                filename_lower.endswith('.txt')):
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type. Only PDF, DOCX, and TXT are allowed."
+            )
+        
+        # Determine file type
+        if filename_lower.endswith('.pdf'):
+            file_type = "pdf"
+        elif filename_lower.endswith('.docx'):
+            file_type = "docx"
+        else:
+            file_type = "txt"
+        
+        # Generate unique job ID
+        job_id = str(uuid.uuid4())
+        
+        # Generate GCS path: uploads/{userId}/{timestamp}_{filename}
+        timestamp = datetime.utcnow().strftime('%Y%m%d_%H%M%S')
+        safe_filename = file.filename.replace(' ', '_')  # Remove spaces
+        gcs_path = f"uploads/{userId}/{timestamp}_{safe_filename}"
+        
+        logger.info(f"📤 Uploading to GCS: gs://{GCS_BUCKET_NAME}/{gcs_path}")
+        
+        # Upload file to Cloud Storage
+        try:
+            bucket = storage_client_gcs.bucket(GCS_BUCKET_NAME)
+            blob = bucket.blob(gcs_path)
+            
+            # Upload with metadata
+            blob.upload_from_string(
+                file_content,
+                content_type=file.content_type
+            )
+            
+            logger.info(f"✅ File uploaded to Cloud Storage successfully")
+            
+        except Exception as upload_error:
+            logger.error(f"❌ GCS upload failed: {upload_error}")
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to upload file to Cloud Storage: {str(upload_error)}"
+            )
+        
+        # Create job entry in Firestore (analysisJobs collection)
+        # This will trigger the Cloud Function to publish to Pub/Sub
+        try:
+            job_data = {
+                'jobId': job_id,
+                'userID': userId,
+                'documentTitle': documentTitle,
+                'originalFilename': file.filename,
+                'fileType': file_type,
+                'gcsPath': gcs_path,
+                'status': 'pending',  # Will trigger Cloud Function
+                'analysisType': analysisType,
+                'createdAt': firestore.SERVER_TIMESTAMP,
+                'updatedAt': firestore.SERVER_TIMESTAMP,
+            }
+            
+            # Save to Firestore
+            job_ref = firestore_client.collection('analysisJobs').document(job_id)
+            job_ref.set(job_data)
+            
+            logger.info(f"✅ Job created in Firestore: {job_id}")
+            
+        except Exception as firestore_error:
+            logger.error(f"❌ Firestore job creation failed: {firestore_error}")
+            
+            # Clean up uploaded file
+            try:
+                blob.delete()
+                logger.info("🧹 Cleaned up uploaded file after Firestore error")
+            except:
+                pass
+            
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to create analysis job: {str(firestore_error)}"
+            )
+        
+        # Return job ID immediately (non-blocking)
+        return {
+            "success": True,
+            "message": "File uploaded successfully. Analysis in progress...",
+            "jobId": job_id,
+            "status": "pending",
+            "estimatedTime": "30-60 seconds",
+            "documentTitle": documentTitle,
+            "fileType": file_type
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Async upload error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Upload failed: {str(e)}"
+        )
+
+
+@app.get("/job-status/{job_id}")
+async def get_job_status(job_id: str, user_id: str = Query(...)):
+    """
+    Get the status of an async analysis job
+    
+    Status values:
+    - pending: Job created, waiting for worker
+    - processing: Worker is processing the document
+    - completed: Analysis complete, results available
+    - failed: Processing failed with error
+    """
+    try:
+        if not firestore_client:
+            raise HTTPException(status_code=503, detail="Firestore not configured")
+        
+        # Get job from Firestore
+        job_ref = firestore_client.collection('analysisJobs').document(job_id)
+        job_doc = job_ref.get()
+        
+        if not job_doc.exists:
+            raise HTTPException(status_code=404, detail="Job not found")
+        
+        job_data = job_doc.to_dict()
+        
+        # Security check - verify user owns this job
+        if job_data.get('userID') != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized access to this job")
+        
+        response = {
+            "jobId": job_id,
+            "status": job_data.get('status', 'unknown'),
+            "documentTitle": job_data.get('documentTitle', ''),
+            "createdAt": job_data.get('createdAt'),
+            "updatedAt": job_data.get('updatedAt'),
+        }
+        
+        # Add result data if completed
+        if job_data.get('status') == 'completed':
+            response['resultAnalysisId'] = job_data.get('resultAnalysisId')
+            response['processingTimeSeconds'] = job_data.get('processingTimeSeconds')
+        
+        # Add error message if failed
+        if job_data.get('status') == 'failed':
+            response['errorMessage'] = job_data.get('errorMessage', 'Unknown error')
+        
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error fetching job status: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch job status: {str(e)}")
+
+
+@app.get("/analysis-result/{analysis_id}")
+async def get_analysis_result(analysis_id: str, user_id: str = Query(...)):
+    """
+    Get the full analysis results from userAnalyses collection
+    
+    Called after job status shows 'completed'
+    """
+    try:
+        if not firestore_client:
+            raise HTTPException(status_code=503, detail="Firestore not configured")
+        
+        # Get analysis from Firestore
+        analysis_ref = firestore_client.collection('userAnalyses').document(analysis_id)
+        analysis_doc = analysis_ref.get()
+        
+        if not analysis_doc.exists:
+            raise HTTPException(status_code=404, detail="Analysis not found")
+        
+        analysis_data = analysis_doc.to_dict()
+        
+        # Security check - verify user owns this analysis
+        if analysis_data.get('userID') != user_id:
+            raise HTTPException(status_code=403, detail="Unauthorized access to this analysis")
+        
+        # Return in format compatible with your frontend
+        return {
+            "filename": analysis_data.get('originalFilename', ''),
+            "file_type": analysis_data.get('fileType', '').upper(),
+            "summary": analysis_data.get('summary', ''),
+            "risks": analysis_data.get('risks', []),
+            "recommendations": analysis_data.get('recommendations', []),
+            "clauseAnalysis": analysis_data.get('clauseAnalysis', {}),
+            "pii_redacted": analysis_data.get('piiRedacted', False),
+            "redacted_document_text": analysis_data.get('redactedDocumentText', ''),
+            "analysisType": analysis_data.get('analysisType', 'standard'),
+            "uploadTimestamp": analysis_data.get('uploadTimestamp'),
+            "processingTimeSeconds": analysis_data.get('processingTimeSeconds')
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"❌ Error fetching analysis result: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to fetch analysis: {str(e)}")
 
 
 # --- RUN SERVER ---

@@ -8,6 +8,8 @@ import BackToTop from "../components/BackToTop";
 import { getAnalysisById } from "../services/firestoreService";
 import LanguageSelector from "../components/LanguageSelector";
 import { getTranslation, requestTranslation } from "../services/firestoreService";
+import JobStatusTracker from "../components/JobStatusTracker";
+import { subscribeToJobStatus } from "../services/firestoreService";
 // REMOVE THIS LINE: import MarkdownRenderer from "../components/MarkdownRenderer";
 import {
   AlertTriangle,
@@ -178,6 +180,12 @@ const [analysis, setAnalysis] = useState(() => {
   const [translatedContent, setTranslatedContent] = useState(null);
   const [translationLoading, setTranslationLoading] = useState(false);
 
+  // NEW: Async job tracking states
+const [isAsyncJob, setIsAsyncJob] = useState(location.state?.isAsyncJob || false);
+const [jobId, setJobId] = useState(location.state?.jobId || null);
+const [jobStatus, setJobStatus] = useState(location.state?.jobStatus || 'pending');
+const [jobData, setJobData] = useState(null);
+
   useEffect(() => {
     if (analysisId && currentUser && !analysis) {
       loadAnalysisFromFirestore();
@@ -205,6 +213,54 @@ useEffect(() => {
     });
   }
 }, [analysis, selectedLanguage, translatedContent, translationLoading, analysisType]);
+
+// NEW: Handle async job tracking
+useEffect(() => {
+  // Check if this is an async job from URL params
+  const pathParts = window.location.pathname.split('/');
+  const isJobPath = pathParts.includes('job');
+  
+  if (isJobPath && pathParts.length >= 4) {
+    const extractedJobId = pathParts[pathParts.length - 1];
+    setIsAsyncJob(true);
+    setJobId(extractedJobId);
+    setJobStatus('pending');
+  }
+}, []);
+
+// NEW: Subscribe to job status updates
+useEffect(() => {
+  if (!isAsyncJob || !jobId || !currentUser) {
+    return;
+  }
+
+  console.log('🔄 Setting up real-time job listener for:', jobId);
+
+  // Subscribe to job status changes in Firestore
+  const unsubscribe = subscribeToJobStatus(jobId, (data) => {
+    if (!data) {
+      console.error('❌ Job not found:', jobId);
+      setJobStatus('failed');
+      return;
+    }
+
+    console.log('📊 Job status update:', data.status);
+    setJobData(data);
+    setJobStatus(data.status);
+
+    // When job completes, load the analysis results
+    if (data.status === 'completed' && data.resultAnalysisId) {
+      console.log('✅ Job completed! Loading analysis:', data.resultAnalysisId);
+      loadCompletedAnalysis(data.resultAnalysisId);
+    }
+  });
+
+  // Cleanup subscription on unmount
+  return () => {
+    console.log('🧹 Cleaning up job listener');
+    unsubscribe();
+  };
+}, [isAsyncJob, jobId, currentUser]);
 
 const loadAnalysisFromFirestore = async () => {
   try {
@@ -247,6 +303,44 @@ const loadAnalysisFromFirestore = async () => {
     setLoading(false);
     alert("Failed to load analysis. Redirecting to dashboard...");
     navigate("/dashboard");
+  }
+};
+
+// NEW: Load completed async analysis
+const loadCompletedAnalysis = async (analysisId) => {
+  try {
+    setLoading(true);
+    console.log('📥 Loading completed analysis:', analysisId);
+    
+    const analysisData = await getAnalysisById(analysisId, currentUser.uid);
+    
+    const transformedAnalysis = {
+      filename: analysisData.originalFilename,
+      file_type: analysisData.fileType,
+      summary: analysisData.summary,
+      risks: analysisData.risks || [],
+      clauses: analysisData.clauses || [],
+      total_risky_clauses: analysisData.total_risky_clauses,
+      pii_redacted: analysisData.piiRedacted,
+      redacted_text: analysisData.redactedDocumentText,
+      redacted_document_text: analysisData.redactedDocumentText,
+      suggestions: analysisData.suggestions || [],
+      fairness_analysis: analysisData.fairness_analysis || [],
+      privacy_notice: analysisData.piiRedacted 
+        ? "✓ Your Personal Data Has Been Redacted for Privacy." 
+        : null,
+    };
+    
+    setAnalysis(transformedAnalysis);
+    setAnalysisType(analysisData.analysisType);
+    setIsAsyncJob(false); // Switch to normal results view
+    setLoading(false);
+    
+    console.log('✅ Analysis loaded successfully');
+  } catch (error) {
+    console.error('❌ Error loading completed analysis:', error);
+    setLoading(false);
+    alert('Failed to load analysis results. Please try again.');
   }
 };
 
@@ -627,6 +721,155 @@ const handleLanguageChange = async (languageCode) => {
       </div>
     );
   }
+
+  // NEW: Show async job status tracker
+if (isAsyncJob && jobStatus !== 'completed') {
+  return (
+    <div className="min-h-screen relative bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] overflow-hidden py-16">
+      <div className="absolute inset-0 aurora-bg opacity-20" />
+
+      <div className="relative max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Header */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8 text-center"
+        >
+          <h1 className="text-4xl font-bold text-white mb-2">
+            Processing Your Document
+          </h1>
+          <p className="text-gray-300">
+            Your analysis is being processed in the background
+          </p>
+        </motion.div>
+
+        {/* Job Status Tracker */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <JobStatusTracker
+            status={jobStatus}
+            documentTitle={jobData?.documentTitle || location.state?.documentTitle || 'Your Document'}
+            estimatedTime="30-60 seconds"
+            errorMessage={jobData?.errorMessage}
+            onComplete={() => {
+              // This will be handled by the useEffect watching jobStatus
+              console.log('Job completed - results will load automatically');
+            }}
+          />
+        </motion.div>
+
+        {/* What's Happening Card */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="mt-8"
+        >
+          <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+            <CardHeader className="border-b border-gray-700/50">
+              <CardTitle className="text-white text-lg flex items-center gap-2">
+                <FileText className="w-5 h-5 text-cyan-400" />
+                What's Happening Behind the Scenes
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <div className="space-y-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-cyan-400 font-bold">1</span>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-semibold mb-1">Secure Upload</h3>
+                    <p className="text-gray-300 text-sm">
+                      Your document is securely stored in Google Cloud Storage
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-purple-400 font-bold">2</span>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-semibold mb-1">PII Redaction</h3>
+                    <p className="text-gray-300 text-sm">
+                      Google DLP API removes personal information for privacy
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-emerald-400 font-bold">3</span>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-semibold mb-1">AI Analysis</h3>
+                    <p className="text-gray-300 text-sm">
+                      Gemini AI analyzes clauses and identifies potential risks
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-yellow-500/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-yellow-400 font-bold">4</span>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-semibold mb-1">Results Ready</h3>
+                    <p className="text-gray-300 text-sm">
+                      Analysis results are saved and will appear automatically
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Action Buttons */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6 }}
+          className="mt-8 flex gap-4 justify-center"
+        >
+          <Button
+            onClick={() => navigate('/dashboard')}
+            variant="outline"
+            className="border-cyan-400/50 text-cyan-400 hover:bg-cyan-400/10"
+          >
+            Go to Dashboard
+          </Button>
+          <Button
+            onClick={() => navigate('/upload')}
+            className="bg-cyan-600 hover:bg-cyan-500"
+          >
+            Upload Another Document
+          </Button>
+        </motion.div>
+
+        {/* Info Box */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.8 }}
+          className="mt-8 text-center"
+        >
+          <div className="inline-flex items-center gap-2 bg-blue-900/30 border border-blue-500/30 rounded-lg px-4 py-2">
+            <Shield className="w-4 h-4 text-blue-400" />
+            <p className="text-blue-200 text-sm">
+              You can safely close this page. Results will be saved to your dashboard.
+            </p>
+          </div>
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+
 
   if (!analysis) {
     return (

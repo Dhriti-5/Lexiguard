@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{database}/documents {
     
     // ========================================
-    // User Analyses Collection
+    // User Analyses Collection (UNCHANGED)
     // ========================================
     // This collection stores privacy-safe analysis results
     // Only redacted document text is stored (NO original documents)
@@ -34,6 +34,48 @@ service cloud.firestore {
                     && request.resource.data.userID == resource.data.userID;
       
       // DELETE: Allow if authenticated user owns this document
+      allow delete: if request.auth != null 
+                    && request.auth.uid == resource.data.userID;
+    }
+    
+    // ========================================
+    // Analysis Jobs Collection (NEW - FOR ASYNC PROCESSING)
+    // ========================================
+    // Tracks async processing jobs for documents
+    // Jobs are created by users, updated by Cloud Run workers
+    
+    match /analysisJobs/{jobId} {
+      
+      // READ: Allow if authenticated user owns this job
+      allow read: if request.auth != null 
+                  && request.auth.uid == resource.data.userID;
+      
+      // CREATE: Allow if authenticated and setting their own userID
+      // Must include required fields for job processing
+      allow create: if request.auth != null 
+                    && request.auth.uid == request.resource.data.userID
+                    && request.resource.data.keys().hasAll([
+                         'jobId',
+                         'userID',
+                         'documentTitle',
+                         'originalFilename',
+                         'fileType',
+                         'gcsPath',
+                         'status',
+                         'analysisType',
+                         'createdAt'
+                       ])
+                    && request.resource.data.status == 'pending';
+      
+      // UPDATE: Allow authenticated users to update their own jobs
+      // ALSO allow Cloud Run worker (service account) to update job status
+      // Service accounts don't have auth tokens, so we check if userID isn't being changed
+      allow update: if (request.auth != null 
+                        && request.auth.uid == resource.data.userID)
+                    || (resource.data.userID != null 
+                        && request.resource.data.userID == resource.data.userID);
+      
+      // DELETE: Allow if authenticated user owns this job
       allow delete: if request.auth != null 
                     && request.auth.uid == resource.data.userID;
     }

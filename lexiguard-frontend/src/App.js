@@ -5,6 +5,7 @@ import ProtectedRoute from "./components/ProtectedRoute";
 import Home from "./pages/Home";
 import Upload from "./pages/Upload";
 import Results from "./pages/Results";
+import JobResults from "./pages/JobResults"; // ✅ ADD THIS IMPORT
 import Dashboard from "./pages/Dashboard";
 import Glossary from "./pages/Glossary";
 import FAQ from "./pages/FAQ";
@@ -34,6 +35,18 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            
+            {/* ✅ ADD THIS NEW ROUTE - Job Status Tracking for Async Uploads */}
+            <Route
+              path="/results/job/:jobId"
+              element={
+                <ProtectedRoute>
+                  <JobResults />
+                </ProtectedRoute>
+              }
+            />
+            
+            {/* Existing Results Routes */}
             <Route
               path="/results"
               element={
@@ -50,6 +63,7 @@ function App() {
                 </ProtectedRoute>
               }
             />
+            
             <Route
               path="/dashboard"
               element={
