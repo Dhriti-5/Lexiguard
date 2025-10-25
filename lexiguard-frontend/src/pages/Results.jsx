@@ -33,7 +33,6 @@ import { motion, AnimatePresence } from "framer-motion";
 const KEYWORDS_REGEX = /\b(agreement|contract|clause|liability|termination|penalty|indemnity|renewal)\b/gi;
 const ACTIONABLE_REGEX = /\b(\d+\s*(days?|weeks?|months?|years?)|due by|deadline|penalty|fine|termination|payment of \$?\d+|effective date|must|shall|obligated|required)\b/gi;
 
-// Add this component after your imports and before the Results component
 // MarkdownRenderer Component
 const MarkdownRenderer = ({ text }) => {
   if (!text || typeof text !== 'string') return null;
@@ -158,7 +157,7 @@ const [analysis, setAnalysis] = useState(() => {
   const [analysisType, setAnalysisType] = useState(location.state?.analysisType || null);
   const [loading, setLoading] = useState(false);
 
-  const [chatMessage, setChatMessage] = useState("");
+   const [chatMessage, setChatMessage] = useState("");
   const [chatHistory, setChatHistory] = useState([]);
   const [chatLoading, setChatLoading] = useState(false);
   const [selectedClauseForNegotiation, setSelectedClauseForNegotiation] = useState(null);
@@ -184,7 +183,6 @@ const [analysis, setAnalysis] = useState(() => {
       loadAnalysisFromFirestore();
     }
   }, [analysisId, currentUser]);
-  
   useEffect(() => {
   // Reset to English whenever we load a new analysis
   setSelectedLanguage('en');
@@ -208,10 +206,15 @@ useEffect(() => {
   }
 }, [analysis, selectedLanguage, translatedContent, translationLoading, analysisType]);
 
-
- const loadAnalysisFromFirestore = async () => {
+const loadAnalysisFromFirestore = async () => {
   try {
     setLoading(true);
+    
+    // FIRST: Reset translation state to English immediately
+    setSelectedLanguage('en');
+    setTranslatedContent(null);
+    setTranslationLoading(false);
+    
     const analysisData = await getAnalysisById(analysisId, currentUser.uid);
     
     console.log("📦 Loaded analysis from Firestore:", analysisData);
@@ -238,10 +241,6 @@ useEffect(() => {
     setAnalysis(transformedAnalysis);
     setAnalysisType(analysisData.analysisType);
     
-    // Ensure language is reset to English
-    setSelectedLanguage('en');
-    setTranslatedContent(null);
-    
     setLoading(false);
   } catch (error) {
     console.error("Error loading analysis:", error);
@@ -251,13 +250,16 @@ useEffect(() => {
   }
 };
 
-  useEffect(() => {
+
+useEffect(() => {
     const chatContainer = document.getElementById("chat-container");
     if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
   }, [chatHistory]);
 
   // Translation handler
-  
+  // ============================================
+// REPLACE your handleLanguageChange function in Results.jsx
+// ============================================
 // Fixed handleLanguageChange function
 const handleLanguageChange = async (languageCode) => {
   if (languageCode === 'en') {
@@ -355,7 +357,7 @@ const handleLanguageChange = async (languageCode) => {
     setTranslationLoading(false);
   }
 };
-
+// Get displayed content based on selected language
   // Get displayed content based on selected language
   const getDisplayedContent = () => {
   // If loading translation, show loading state
