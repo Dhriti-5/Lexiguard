@@ -1305,82 +1305,81 @@ const handleLanguageChange = async (languageCode) => {
     );
   }
 
-  // Render Standard Analysis View
-  const summary = displayedContent.summary;
-  const risks = displayedContent.risks;
-  const suggestions = displayedContent.suggestions;
-  const fairnessAnalysis = analysis.fairness_analysis || [];
-  const fileType = analysis.file_type || "Text";
+// Render Standard Analysis View
+const summary = displayedContent.summary;
+const risks = displayedContent.risks;
+const suggestions = displayedContent.suggestions;
+const fairnessAnalysis = analysis.fairness_analysis || [];
+const fileType = analysis.file_type || "Text";
 
-  return (
-    <div className="min-h-screen relative bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] overflow-hidden py-16">
-      <div className="absolute inset-0 aurora-bg opacity-20" />
+return (
+  <div className="min-h-screen relative bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] overflow-hidden py-16">
+    <div className="absolute inset-0 aurora-bg opacity-20" />
 
-      <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header with Language Selector */}
+    <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      {/* Header with Language Selector */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex items-center justify-between mb-8 flex-wrap gap-4"
+      >
+        <Button
+          onClick={() => navigate("/upload")}
+          variant="outline"
+          className="border-cyan-400/50 text-cyan-400 hover:bg-cyan-400/10"
+        >
+          <ArrowLeft className="w-4 h-4 mr-2" />
+          New Analysis
+        </Button>
+        
+        <div className="flex items-center gap-4">
+          <LanguageSelector
+            selectedLanguage={selectedLanguage}
+            onLanguageChange={handleLanguageChange}
+            loading={translationLoading}
+          />
+          
+          <div className="text-right">
+            <h1 className="text-3xl font-bold text-white mb-1">
+              Standard Analysis Results
+            </h1>
+            <p className="text-gray-300 text-sm">
+              {analysis.filename || "Document"} • {risks.length} risk{risks.length !== 1 ? "s" : ""} identified
+            </p>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Privacy Notice */}
+      {analysis.privacy_notice && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="flex items-center justify-between mb-8 flex-wrap gap-4"
+          transition={{ delay: 0.05 }}
+          className="mb-6 px-4 py-3 bg-green-700/70 text-green-100 rounded-lg font-medium text-sm flex items-center gap-2"
         >
-          <Button
-            onClick={() => navigate("/upload")}
-            variant="outline"
-            className="border-cyan-400/50 text-cyan-400 hover:bg-cyan-400/10"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            New Analysis
-          </Button>
-          
-          <div className="flex items-center gap-4">
-            <LanguageSelector
-              selectedLanguage={selectedLanguage}
-              onLanguageChange={handleLanguageChange}
-              loading={translationLoading}
-            />
-            
-            <div className="text-right">
-              <h1 className="text-3xl font-bold text-white mb-1">
-                Standard Analysis Results
-              </h1>
-              <p className="text-gray-300 text-sm">
-                {analysis.filename || "Document"} • {risks.length} risk{risks.length !== 1 ? "s" : ""} identified
-              </p>
-            </div>
-          </div>
+          <CheckCircle className="w-5 h-5 stroke-current flex-shrink-0" />
+          <span>{analysis.privacy_notice}</span>
         </motion.div>
+      )}
 
-        {/* Privacy Notice */}
-        {analysis.privacy_notice && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.05 }}
-            className="mb-6 px-4 py-3 bg-green-700/70 text-green-100 rounded-lg font-medium text-sm flex items-center gap-2"
-          >
-            <CheckCircle className="w-5 h-5 stroke-current flex-shrink-0" />
-            <span>{analysis.privacy_notice}</span>
-          </motion.div>
-        )}
+      {/* Translation Indicator */}
+      {selectedLanguage !== 'en' && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.06 }}
+          className="mb-6 px-4 py-3 bg-blue-700/70 text-blue-100 rounded-lg font-medium text-sm flex items-center gap-2"
+        >
+          <Globe className="w-5 h-5 stroke-current flex-shrink-0" />
+          <span>Content translated to {getLanguageName(selectedLanguage)}</span>
+        </motion.div>
+      )}
 
-        {/* Translation Indicator */}
-        {selectedLanguage !== 'en' && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.06 }}
-            className="mb-6 px-4 py-3 bg-blue-700/70 text-blue-100 rounded-lg font-medium text-sm flex items-center gap-2"
-          >
-            <Globe className="w-5 h-5 stroke-current flex-shrink-0" />
-            <span>Content translated to {getLanguageName(selectedLanguage)}</span>
-          </motion.div>
-        )}
-
-        <div className="grid lg:grid-cols-3 gap-8">
-          {/* Main Content - Left Side */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Summary Card */}
-            {/* Summary Card */}
+      <div className="grid lg:grid-cols-3 gap-8">
+        {/* Main Content - Left Side */}
+        <div className="lg:col-span-2 space-y-6">
+{/* Summary Card */}
 <motion.div
   initial={{ opacity: 0, y: 20 }}
   animate={{ opacity: 1, y: 0 }}
@@ -1394,169 +1393,245 @@ const handleLanguageChange = async (languageCode) => {
       </CardTitle>
     </CardHeader>
     <CardContent className="p-6">
-      <MarkdownRenderer text={summary} />
+      <div className="prose prose-invert max-w-none space-y-4">
+        {summary.split('\n').map((line, index) => {
+          const trimmed = line.trim();
+          if (!trimmed) return null;
+          
+          // Handle ## headings (main sections)
+          if (trimmed.startsWith('## ')) {
+            return (
+              <h2 key={index} className="text-lg font-bold text-cyan-400 mt-6 mb-3 pb-2 border-b border-cyan-400/30">
+                {trimmed.replace('## ', '')}
+              </h2>
+            );
+          }
+          
+          // Handle **Bold:** sub-headings
+          if (trimmed.match(/^\*\*.*\*\*:$/)) {
+            return (
+              <h3 key={index} className="text-base font-semibold text-cyan-300 mt-4 mb-2">
+                {trimmed.replace(/\*\*/g, '')}
+              </h3>
+            );
+          }
+          
+          // Check if it's a bullet point
+          if (trimmed.startsWith('•') || trimmed.match(/^[-*]\s/)) {
+            const content = trimmed.replace(/^[•\-*]\s*/, '');
+            
+            // Process bold text (**text**)
+            const renderWithBold = (text) => {
+              const parts = text.split(/(\*\*.*?\*\*)/g);
+              return parts.map((part, idx) => {
+                if (part.startsWith('**') && part.endsWith('**')) {
+                  const boldText = part.slice(2, -2);
+                  return (
+                    <strong key={idx} className="text-white font-semibold">
+                      {highlightText(boldText)}
+                    </strong>
+                  );
+                }
+                return <span key={idx}>{highlightText(part)}</span>;
+              });
+            };
+            
+            return (
+              <div key={index} className="flex items-start gap-2 ml-4 my-2">
+                <span className="text-cyan-400 mt-1.5 flex-shrink-0">•</span>
+                <span className="text-gray-200 leading-relaxed flex-1">
+                  {renderWithBold(content)}
+                </span>
+              </div>
+            );
+          }
+          
+          // Regular paragraph with bold support
+          const renderWithBold = (text) => {
+            const parts = text.split(/(\*\*.*?\*\*)/g);
+            return parts.map((part, idx) => {
+              if (part.startsWith('**') && part.endsWith('**')) {
+                const boldText = part.slice(2, -2);
+                return (
+                  <strong key={idx} className="text-white font-semibold">
+                    {highlightText(boldText)}
+                  </strong>
+                );
+              }
+              return <span key={idx}>{highlightText(part)}</span>;
+            });
+          };
+          
+          return (
+            <p key={index} className="text-gray-200 leading-relaxed">
+              {renderWithBold(trimmed)}
+            </p>
+          );
+        })}
+      </div>
     </CardContent>
   </Card>
 </motion.div>
-            {/* Risks Card */}
+
+          {/* Risks Card */}
+                    {/* Risks Card */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+          >
+            <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+              <CardHeader className="border-b border-gray-700/50">
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <AlertTriangle className="w-5 h-5 text-red-400" />
+                  Identified Risks ({risks.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6">
+                {risks.length === 0 ? (
+                  <div className="flex items-center gap-3 text-emerald-400 bg-emerald-900/20 p-4 rounded-lg border border-emerald-500/30">
+                    <CheckCircle className="w-5 h-5" />
+                    <span>No significant risks detected in this document.</span>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {risks.map((risk, index) => (
+                      <div
+                        key={index}
+                        className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 hover:border-cyan-400/50 transition-all"
+                      >
+                        <div className="flex items-start justify-between gap-4 mb-3">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span
+                                className={`px-3 py-1 rounded-full text-xs font-semibold border ${getRiskBadge(
+                                  risk.severity
+                                )}`}
+                              >
+                                {risk.severity} Risk
+                              </span>
+                            </div>
+                            <p className="text-gray-300 text-sm italic mb-2 bg-black/30 p-3 rounded border border-gray-700/50">
+                              "{risk.clause_text}"
+                            </p>
+                            <p className="text-gray-200 text-sm">
+                              {risk.risk_explanation}
+                            </p>
+                          </div>
+                        </div>
+                        
+                        <Button
+                          onClick={() => handleGenerateNegotiation(risk.clause_text)}
+                          size="sm"
+                          className="bg-cyan-600 hover:bg-cyan-500 text-white mt-2"
+                        >
+                          <Mail className="w-4 h-4 mr-2" />
+                          Draft Negotiation Email
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          {/* Suggested Actions Card */}
+          {suggestions.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
+              transition={{ delay: 0.25 }}
             >
               <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
                 <CardHeader className="border-b border-gray-700/50">
                   <CardTitle className="flex items-center gap-2 text-white">
-                    <AlertTriangle className="w-5 h-5 text-red-400" />
-                    Identified Risks ({risks.length})
+                    <TrendingUp className="w-5 h-5 text-emerald-400" />
+                    Suggested Actions
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-6">
-                  {risks.length === 0 ? (
-                    <div className="flex items-center gap-3 text-emerald-400 bg-emerald-900/20 p-4 rounded-lg border border-emerald-500/30">
-                      <CheckCircle className="w-5 h-5" />
-                      <span>No significant risks detected in this document.</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {risks.map((risk, index) => (
-                        <div
-                          key={index}
-                          className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 hover:border-cyan-400/50 transition-all"
-                        >
-                          <div className="flex items-start justify-between gap-4 mb-3">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-2">
-                                <span
-                                  className={`px-3 py-1 rounded-full text-xs font-semibold border ${getRiskBadge(
-                                    risk.severity
-                                  )}`}
-                                >
-                                  {risk.severity} Risk
-                                </span>
-                              </div>
-                              <p className="text-gray-300 text-sm italic mb-2 bg-black/30 p-3 rounded border border-gray-700/50">
-                                "{risk.clause_text}"
-                              </p>
-                              <p className="text-gray-200 text-sm">
-                                {risk.risk_explanation}
-                              </p>
-                            </div>
-                          </div>
-                          
-                          <Button
-                            onClick={() => handleGenerateNegotiation(risk.clause_text)}
-                            size="sm"
-                            className="bg-cyan-600 hover:bg-cyan-500 text-white mt-2"
-                          >
-                            <Mail className="w-4 h-4 mr-2" />
-                            Draft Negotiation Email
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <div className="space-y-3">
+                    {suggestions.map((suggestion, index) => (
+                      <div
+                        key={index}
+                        className="flex items-start gap-3 bg-emerald-900/20 border border-emerald-500/30 p-4 rounded-lg"
+                      >
+                        <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                        <p className="text-gray-200 text-sm">{highlightText(suggestion)}</p>
+                      </div>
+                    ))}
+                  </div>
                 </CardContent>
               </Card>
             </motion.div>
+          )}
 
-            {/* Fairness Analysis */}
-            {fairnessAnalysis.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-              >
-                <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
-                  <CardHeader className="border-b border-gray-700/50">
-                    <CardTitle className="flex items-center gap-2 text-white">
-                      <Scale className="w-5 h-5 text-purple-400" />
-                      Fairness Analysis
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-6 space-y-6">
-                    {fairnessAnalysis.map((item, index) => (
-                      <div key={index} className="border border-gray-700 rounded-lg p-4 bg-gray-800/30">
-                        <div className="mb-4">
-                          <div className="flex items-center gap-3 mb-2">
-                            <span className="text-sm font-semibold text-gray-400">Fairness Score:</span>
-                            <div className="flex items-center gap-2">
-                              <div className="w-32 h-2 bg-gray-700 rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full ${
-                                    item.fairness_score >= 70
-                                      ? "bg-emerald-500"
-                                      : item.fairness_score >= 40
-                                      ? "bg-yellow-500"
-                                      : "bg-red-500"
-                                  }`}
-                                  style={{ width: `${item.fairness_score}%` }}
-                                />
-                              </div>
-                              <span className="text-white font-bold">{item.fairness_score}/100</span>
+          {/* Fairness Analysis */}
+          {fairnessAnalysis.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+            >
+              <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+                <CardHeader className="border-b border-gray-700/50">
+                  <CardTitle className="flex items-center gap-2 text-white">
+                    <Scale className="w-5 h-5 text-purple-400" />
+                    Fairness Analysis
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-6 space-y-6">
+                  {fairnessAnalysis.map((item, index) => (
+                    <div key={index} className="border border-gray-700 rounded-lg p-4 bg-gray-800/30">
+                      <div className="mb-4">
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className="text-sm font-semibold text-gray-400">Fairness Score:</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-32 h-2 bg-gray-700 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full ${
+                                  item.fairness_score >= 70
+                                    ? "bg-emerald-500"
+                                    : item.fairness_score >= 40
+                                    ? "bg-yellow-500"
+                                    : "bg-red-500"
+                                }`}
+                                style={{ width: `${item.fairness_score}%` }}
+                              />
                             </div>
-                          </div>
-                        </div>
-
-                        <div className="space-y-3">
-                          <div>
-                            <h4 className="text-sm font-semibold text-red-400 mb-1">Risky Clause:</h4>
-                            <p className="text-gray-300 text-sm italic bg-red-900/20 p-2 rounded border border-red-500/30">
-                              "{item.risky_clause}"
-                            </p>
-                          </div>
-
-                          <div>
-                            <h4 className="text-sm font-semibold text-emerald-400 mb-1">Suggested Standard Clause:</h4>
-                            <p className="text-gray-300 text-sm bg-emerald-900/20 p-2 rounded border border-emerald-500/30">
-                              {item.standard_clause}
-                            </p>
-                          </div>
-
-                          <div>
-                            <h4 className="text-sm font-semibold text-blue-400 mb-1">Explanation:</h4>
-                            <p className="text-gray-200 text-sm">{item.explanation}</p>
+                            <span className="text-white font-bold">{item.fairness_score}/100</span>
                           </div>
                         </div>
                       </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              </motion.div>
-            )}
 
-            {/* Suggestions Card */}
-            {suggestions.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.4 }}
-              >
-                <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
-                  <CardHeader className="border-b border-gray-700/50">
-                    <CardTitle className="flex items-center gap-2 text-white">
-                      <TrendingUp className="w-5 h-5 text-emerald-400" />
-                      Suggested Actions
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-6">
-                    <div className="space-y-3">
-                      {suggestions.map((suggestion, index) => (
-                        <div
-                          key={index}
-                          className="flex items-start gap-3 bg-emerald-900/20 border border-emerald-500/30 p-4 rounded-lg"
-                        >
-                          <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
-                          <p className="text-gray-200 text-sm">{highlightText(suggestion)}</p>
+                      <div className="space-y-3">
+                        <div>
+                          <h4 className="text-sm font-semibold text-red-400 mb-1">Risky Clause:</h4>
+                          <p className="text-gray-300 text-sm italic bg-red-900/20 p-2 rounded border border-red-500/30">
+                            "{item.risky_clause}"
+                          </p>
                         </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              </motion.div>
-            )}
-          </div>
 
+                        <div>
+                          <h4 className="text-sm font-semibold text-emerald-400 mb-1">Suggested Standard Clause:</h4>
+                          <p className="text-gray-300 text-sm bg-emerald-900/20 p-2 rounded border border-emerald-500/30">
+                            {item.standard_clause}
+                          </p>
+                        </div>
+
+                        <div>
+                          <h4 className="text-sm font-semibold text-blue-400 mb-1">Explanation:</h4>
+                          <p className="text-gray-200 text-sm">{item.explanation}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
+        </div>
           {/* Sidebar - Right Side */}
           <div className="space-y-6">
             <motion.div

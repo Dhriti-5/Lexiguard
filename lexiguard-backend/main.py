@@ -366,11 +366,50 @@ class ExtendedAnalysisRequest(BaseModel):
 
 SUMMARY_PROMPT = """
 You are LexiGuard, an expert AI assistant that explains complex legal documents in simple terms.
-Analyze the following contract. Provide a concise, bullet-point summary covering:
-1. The primary purpose of the agreement.
-2. The key responsibilities of each party.
-3. The duration and key financial terms (like rent, salary, etc.).
-Use clear, simple language suitable for a non-lawyer.
+
+IMPORTANT: The document you're analyzing has had Personal Identifiable Information (PII) redacted and replaced with placeholders like [PERSON_NAME], [EMAIL_ADDRESS], [STREET_ADDRESS], etc. Focus on explaining the terms, obligations, and rights regardless of these placeholders.
+
+Analyze the following contract and provide a clear, well-structured summary.
+
+Format your response using clean markdown:
+- Use ## for main section headings
+- Use **bold** for key terms, amounts, and dates
+- Use simple bullet points (-) for lists
+- Do NOT use nested bullets or asterisks (*)
+- Keep paragraphs short and readable
+- Use proper spacing between sections
+
+Structure your summary as follows:
+
+## Document Overview
+Briefly explain what type of agreement this is and identify the parties involved (use placeholders like "the Tenant" or "the Service Provider" if names are redacted).
+
+## Key Responsibilities
+
+**Party A Responsibilities:**
+- List main obligations clearly
+- Highlight any unusual or concerning terms
+- Use specific numbers, dates, and amounts when mentioned
+
+**Party B Responsibilities:**
+- List main obligations clearly
+- Highlight any heavy burdens or unusual requirements
+- Use specific numbers, dates, and amounts when mentioned
+
+## Duration and Important Dates
+- Start date
+- End date or renewal terms
+- Notice periods for termination
+- Any automatic renewal clauses
+
+## Financial Terms
+- Primary payment amounts and due dates
+- Additional fees or charges
+- Security deposits and refund conditions
+- Late payment penalties
+- Any provisions for fee increases
+
+Use clear, simple language suitable for a non-lawyer. When you see redacted placeholders like [PERSON_NAME], refer to them generically (e.g., "the Tenant", "the Client", "the Service Provider").
 """
 
 RISK_ANALYSIS_PROMPT = """
@@ -662,14 +701,14 @@ async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
         elif filename.endswith(".docx"):
             document_text = extract_text_from_docx(file.file)
             file_type = "DOCX"
-        elif filename.endswith(".txt"):  # ✅ ADD TXT SUPPORT
+        elif filename.endswith(".txt"):
             document_text = extract_text_from_txt(file.file)
             file_type = "TXT"
         else:
             return {"error": "Unsupported file type. Only PDF, DOCX, or TXT allowed."}
     elif text:
         document_text = text
-        file_type = "Text"  # ✅ ADD file_type for manual text input
+        file_type = "Text"
     else:
         raise HTTPException(status_code=400, detail="No file or text provided")
 
@@ -678,12 +717,67 @@ async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
     
     result = analyze_text_internal(document_text)
     
+    # ✅ GENERATE DYNAMIC SUGGESTIONS using AI
+    risks_list = result.get("risks", {}).get("risks", [])
+    suggestions = []
+    
+    if risks_list and model:
+        try:
+            # Create a prompt to generate contextual suggestions
+            risks_summary = "\n".join([
+                f"- {risk.get('severity', 'Unknown')} Risk: {risk.get('risk_explanation', 'No explanation')}"
+                for risk in risks_list[:5]  # Limit to top 5 risks
+            ])
+            
+            suggestion_prompt = f"""
+You are LexiGuard, an AI legal assistant. Based on the following risks identified in a legal document, provide 4-6 specific, actionable suggestions for the user.
+
+Identified Risks:
+{risks_summary}
+
+Generate practical suggestions that:
+1. Address the specific risks mentioned
+2. Provide clear action items (e.g., "Request clarification on...", "Negotiate to change...", "Consult a lawyer about...")
+3. Are professional and constructive
+4. Help the user protect their interests
+
+Return ONLY a JSON array of suggestion strings. Format:
+["suggestion 1", "suggestion 2", "suggestion 3", ...]
+
+Do NOT include any markdown, code blocks, or extra text - just the JSON array.
+"""
+            
+            suggestion_response = model.generate_content(suggestion_prompt)
+            suggestions_text = suggestion_response.text.strip().replace("```json", "").replace("```", "").strip()
+            
+            try:
+                suggestions = json.loads(suggestions_text)
+                if not isinstance(suggestions, list):
+                    raise ValueError("Response is not a list")
+            except Exception as e:
+                logger.error(f"Failed to parse AI suggestions: {e}")
+                # Fallback to smart default suggestions
+                suggestions = generate_fallback_suggestions(risks_list)
+                
+        except Exception as e:
+            logger.error(f"Error generating AI suggestions: {e}")
+            suggestions = generate_fallback_suggestions(risks_list)
+    else:
+        # No risks found - provide positive suggestions
+        suggestions = [
+            "No significant risks detected. The document appears to contain standard terms and conditions.",
+            "Proceed with standard due diligence: verify all parties' information, dates, and financial terms.",
+            "Ensure you understand all obligations and responsibilities outlined in the agreement before signing.",
+            "Keep a signed copy of the agreement for your records and future reference."
+        ]
+    
     # Return in format expected by frontend
     response = {
         "filename": file.filename if file else "Text Input",
         "file_type": file.filename.split(".")[-1].upper() if file else "Text",
         "summary": result.get("summary", ""),
-        "risks": result.get("risks", {}).get("risks", []),
+        "risks": risks_list,
+        "suggestions": suggestions,
         "pii_redacted": result.get("pii_redacted", False),
         "redacted_document_text": redacted_document_text
     }
@@ -694,6 +788,63 @@ async def analyze_file(file: UploadFile = File(None), text: str = Form(None)):
     
     return response
 
+
+def generate_fallback_suggestions(risks_list):
+    """Generate intelligent fallback suggestions based on risk analysis"""
+    suggestions = []
+    
+    high_risks = [r for r in risks_list if r.get("severity") == "High"]
+    medium_risks = [r for r in risks_list if r.get("severity") == "Medium"]
+    
+    # Analyze risk types
+    risk_keywords = {
+        "liability": ["liability", "indemnify", "indemnification", "damages"],
+        "termination": ["termination", "terminate", "cancel", "end"],
+        "renewal": ["renewal", "renew", "automatic", "auto-renew"],
+        "payment": ["payment", "fee", "penalty", "fine", "charge"],
+        "non-compete": ["non-compete", "non compete", "restrict", "prohibition"]
+    }
+    
+    detected_risks = set()
+    for risk in risks_list:
+        risk_text = (risk.get("clause_text", "") + " " + risk.get("risk_explanation", "")).lower()
+        for risk_type, keywords in risk_keywords.items():
+            if any(keyword in risk_text for keyword in keywords):
+                detected_risks.add(risk_type)
+    
+    # Generate specific suggestions based on detected risk types
+    if high_risks:
+        suggestions.append(f"Immediate attention required: {len(high_risks)} high-risk clause(s) identified that could significantly impact your rights or obligations.")
+    
+    if "liability" in detected_risks:
+        suggestions.append("Negotiate to add reasonable liability caps or limitations to protect yourself from unlimited financial exposure.")
+    
+    if "termination" in detected_risks:
+        suggestions.append("Request mutual termination rights with adequate notice period to ensure fair treatment for both parties.")
+    
+    if "renewal" in detected_risks:
+        suggestions.append("Ask to remove automatic renewal clauses or add clear opt-out procedures with sufficient advance notice.")
+    
+    if "payment" in detected_risks:
+        suggestions.append("Clarify all payment terms, penalties, and fee structures in writing before signing the agreement.")
+    
+    if "non-compete" in detected_risks:
+        suggestions.append("Negotiate to narrow the scope, duration, and geographic limitations of any non-compete restrictions.")
+    
+    # Always add general advice
+    if len(risks_list) >= 3:
+        suggestions.append("Strongly recommend engaging a legal professional to review all identified risks before signing this agreement.")
+    
+    suggestions.append("Document all communications and keep records of any proposed amendments or clarifications.")
+    
+    if not suggestions:
+        suggestions = [
+            f"Review the {len(risks_list)} identified risk(s) carefully with the other party.",
+            "Consider consulting with legal counsel to address any concerns.",
+            "Request written clarification for any unclear terms before proceeding."
+        ]
+    
+    return suggestions
 
 @app.post("/analyze-clauses")
 async def analyze_clauses(file: UploadFile = File(None), text: str = Form(None)):
