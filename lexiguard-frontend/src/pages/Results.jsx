@@ -647,7 +647,9 @@ const handleLanguageChange = async (languageCode) => {
     );
   }
 
-  const isDetailedAnalysis = analysisType === "detailed" || (analysis.clauses && Array.isArray(analysis.clauses));
+  // const isDetailedAnalysis = analysisType === "detailed" || (analysis.clauses && Array.isArray(analysis.clauses));
+    const isDetailedAnalysis = analysisType === "detailed" || (analysis.clauses && Array.isArray(analysis.clauses) && analysis.clauses.length > 0);
+
   const displayedContent = getDisplayedContent();
   
   // Render Detailed Clause Analysis View
