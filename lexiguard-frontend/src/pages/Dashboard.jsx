@@ -38,15 +38,13 @@ export default function Dashboard() {
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState(null);
   const [searchTerm, setSearchTerm] = useState("");
-  const [filterType, setFilterType] = useState("all"); // all, standard, detailed, starred
-  const [sortBy, setSortBy] = useState("date"); // date, title, risk
+  const [filterType, setFilterType] = useState("all");
+  const [sortBy, setSortBy] = useState("date");
   
-  // Edit/Delete modals
   const [editingId, setEditingId] = useState(null);
   const [editTitle, setEditTitle] = useState("");
   const [deletingId, setDeletingId] = useState(null);
 
-  // Load analyses on mount
   useEffect(() => {
     if (currentUser) {
       loadDashboardData();
@@ -70,12 +68,10 @@ export default function Dashboard() {
     }
   };
 
-  // Handle view analysis
   const handleViewAnalysis = (analysisId) => {
     navigate(`/results/${analysisId}`);
   };
 
-  // Handle edit title
   const handleStartEdit = (analysis) => {
     setEditingId(analysis.id);
     setEditTitle(analysis.documentTitle);
@@ -99,14 +95,12 @@ export default function Dashboard() {
     setEditTitle("");
   };
 
-  // Handle delete
   const handleDeleteConfirm = async () => {
     try {
       await deleteAnalysis(deletingId, currentUser.uid);
       setAnalyses(analyses.filter(a => a.id !== deletingId));
       setDeletingId(null);
       
-      // Reload stats
       const userStats = await getAnalysisStats(currentUser.uid);
       setStats(userStats);
     } catch (error) {
@@ -115,7 +109,6 @@ export default function Dashboard() {
     }
   };
 
-  // Handle star toggle
   const handleToggleStar = async (analysisId, currentStarred) => {
     try {
       await toggleStarredAnalysis(analysisId, currentUser.uid, !currentStarred);
@@ -127,11 +120,9 @@ export default function Dashboard() {
     }
   };
 
-  // Filter and sort analyses
   const getFilteredAnalyses = () => {
     let filtered = analyses;
 
-    // Search filter
     if (searchTerm) {
       filtered = filtered.filter(a => 
         a.documentTitle.toLowerCase().includes(searchTerm.toLowerCase()) ||
@@ -139,14 +130,12 @@ export default function Dashboard() {
       );
     }
 
-    // Type filter
     if (filterType === "starred") {
       filtered = filtered.filter(a => a.starred);
     } else if (filterType !== "all") {
       filtered = filtered.filter(a => a.analysisType === filterType);
     }
 
-    // Sort
     if (sortBy === "date") {
       filtered.sort((a, b) => b.uploadTimestamp - a.uploadTimestamp);
     } else if (sortBy === "title") {
@@ -168,7 +157,6 @@ export default function Dashboard() {
 
   const filteredAnalyses = getFilteredAnalyses();
 
-  // Get risk badge styling
   const getRiskBadge = (analysis) => {
     let highCount = 0;
     let totalCount = 0;
@@ -189,6 +177,23 @@ export default function Dashboard() {
     return { color: "bg-green-500/20 text-green-400 border-green-500/50", text: "Low Risk" };
   };
 
+  // Helper function to safely render summary text
+  const renderSummary = (summary) => {
+    if (!summary) return null;
+    
+    // If summary is a string, return it
+    if (typeof summary === 'string') {
+      return summary;
+    }
+    
+    // If summary is an object (shouldn't happen, but handle it)
+    if (typeof summary === 'object') {
+      return JSON.stringify(summary);
+    }
+    
+    return null;
+  };
+
   if (loading) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] flex items-center justify-center">
@@ -202,7 +207,6 @@ export default function Dashboard() {
 
   return (
     <div className="min-h-screen relative bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] overflow-hidden py-16">
-      {/* Aurora Background */}
       <div className="absolute inset-0 aurora-bg opacity-20" />
 
       <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
@@ -335,7 +339,6 @@ export default function Dashboard() {
           <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-xl">
             <CardContent className="p-4">
               <div className="flex flex-col md:flex-row gap-4">
-                {/* Search */}
                 <div className="flex-1 relative">
                   <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-5 h-5 text-gray-400" />
                   <input
@@ -347,7 +350,6 @@ export default function Dashboard() {
                   />
                 </div>
 
-                {/* Filter by type */}
                 <select
                   value={filterType}
                   onChange={(e) => setFilterType(e.target.value)}
@@ -359,7 +361,6 @@ export default function Dashboard() {
                   <option value="starred">Starred</option>
                 </select>
 
-                {/* Sort */}
                 <select
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value)}
@@ -508,10 +509,10 @@ export default function Dashboard() {
                           </span>
                         </div>
 
-                        {/* Summary Preview */}
+                        {/* Summary Preview - FIXED */}
                         {analysis.summary && (
                           <p className="text-gray-300 text-sm line-clamp-2">
-                            {analysis.summary}
+                            {renderSummary(analysis.summary)}
                           </p>
                         )}
 

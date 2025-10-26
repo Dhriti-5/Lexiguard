@@ -13,6 +13,7 @@ import {
   serverTimestamp 
 } from 'firebase/firestore';
 import { db } from '../firebase/config';
+import { onSnapshot } from 'firebase/firestore';
 
 const COLLECTION_NAME = 'userAnalyses';
 
@@ -495,5 +496,215 @@ export const getSupportedLanguages = async () => {
       { code: 'de', name: 'German' },
       { code: 'zh', name: 'Chinese' },
     ];
+  }
+};
+
+const JOBS_COLLECTION = 'analysisJobs';
+
+/**
+ * Subscribe to real-time job status updates
+ * 
+ * @param {string} jobId - The job ID to monitor
+ * @param {function} callback - Callback function called with job data on updates
+ * @returns {function} Unsubscribe function
+ * 
+ * Usage:
+ * const unsubscribe = subscribeToJobStatus(jobId, (jobData) => {
+ *   console.log('Job status:', jobData.status);
+ *   if (jobData.status === 'completed') {
+ *     // Fetch results
+ *   }
+ * });
+ * 
+ * // Later: unsubscribe();
+ */
+export const subscribeToJobStatus = (jobId, callback) => {
+  try {
+    const jobRef = doc(db, JOBS_COLLECTION, jobId);
+    
+    const unsubscribe = onSnapshot(
+      jobRef,
+      (docSnapshot) => {
+        if (docSnapshot.exists()) {
+          const jobData = {
+            id: docSnapshot.id,
+            ...docSnapshot.data(),
+            // Convert Firestore timestamps to JS dates
+            createdAt: docSnapshot.data().createdAt?.toDate(),
+            updatedAt: docSnapshot.data().updatedAt?.toDate(),
+            startedAt: docSnapshot.data().startedAt?.toDate(),
+            completedAt: docSnapshot.data().completedAt?.toDate(),
+          };
+          callback(jobData);
+        } else {
+          console.error('Job not found:', jobId);
+          callback(null);
+        }
+      },
+      (error) => {
+        console.error('Error listening to job status:', error);
+        callback(null);
+      }
+    );
+    
+    return unsubscribe;
+  } catch (error) {
+    console.error('❌ Error setting up job listener:', error);
+    return () => {}; // Return no-op function
+  }
+};
+
+/**
+ * Get a single job by ID (one-time fetch)
+ * 
+ * @param {string} jobId - The job ID
+ * @returns {Promise<object|null>} Job data or null if not found
+ */
+export const getJobById = async (jobId) => {
+  try {
+    const jobRef = doc(db, JOBS_COLLECTION, jobId);
+    const jobSnapshot = await getDoc(jobRef);
+    
+    if (!jobSnapshot.exists()) {
+      console.error('Job not found:', jobId);
+      return null;
+    }
+    
+    const data = jobSnapshot.data();
+    return {
+      id: jobSnapshot.id,
+      ...data,
+      createdAt: data.createdAt?.toDate(),
+      updatedAt: data.updatedAt?.toDate(),
+      startedAt: data.startedAt?.toDate(),
+      completedAt: data.completedAt?.toDate(),
+    };
+  } catch (error) {
+    console.error('❌ Error fetching job:', error);
+    return null;
+  }
+};
+
+/**
+ * Get all jobs for a user
+ * 
+ * @param {string} userId - Firebase Auth user ID
+ * @returns {Promise<Array>} Array of job documents
+ */
+export const getUserJobs = async (userId) => {
+  try {
+    const q = query(
+      collection(db, JOBS_COLLECTION),
+      where('userID', '==', userId),
+      orderBy('createdAt', 'desc')
+    );
+    
+    const querySnapshot = await getDocs(q);
+    const jobs = [];
+    
+    querySnapshot.forEach((doc) => {
+      jobs.push({
+        id: doc.id,
+        ...doc.data(),
+        createdAt: doc.data().createdAt?.toDate(),
+        updatedAt: doc.data().updatedAt?.toDate(),
+        startedAt: doc.data().startedAt?.toDate(),
+        completedAt: doc.data().completedAt?.toDate(),
+      });
+    });
+    
+    console.log(`✅ Retrieved ${jobs.length} jobs for user`);
+    return jobs;
+  } catch (error) {
+    console.error('❌ Error fetching user jobs:', error);
+    return [];
+  }
+};
+
+/**
+ * Get jobs by status for a user
+ * 
+ * @param {string} userId - Firebase Auth user ID
+ * @param {string} status - Job status (pending, processing, completed, failed)
+ * @returns {Promise<Array>} Array of job documents
+ */
+export const getUserJobsByStatus = async (userId, status) => {
+  try {
+    const q = query(
+      collection(db, JOBS_COLLECTION),
+      where('userID', '==', userId),
+      where('status', '==', status),
+      orderBy('createdAt', 'desc')
+    );
+    
+    const querySnapshot = await getDocs(q);
+    const jobs = [];
+    
+    querySnapshot.forEach((doc) => {
+      jobs.push({
+        id: doc.id,
+        ...doc.data(),
+        createdAt: doc.data().createdAt?.toDate(),
+        updatedAt: doc.data().updatedAt?.toDate(),
+      });
+    });
+    
+    return jobs;
+  } catch (error) {
+    console.error('❌ Error fetching jobs by status:', error);
+    return [];
+  }
+};
+
+/**
+ * Delete a job
+ * 
+ * @param {string} jobId - Job document ID
+ * @param {string} userId - Firebase Auth user ID (for security)
+ */
+export const deleteJob = async (jobId, userId) => {
+  try {
+    const jobRef = doc(db, JOBS_COLLECTION, jobId);
+    const jobSnap = await getDoc(jobRef);
+    
+    if (!jobSnap.exists()) {
+      throw new Error('Job not found');
+    }
+    
+    // Security check
+    if (jobSnap.data().userID !== userId) {
+      throw new Error('Unauthorized');
+    }
+    
+    await deleteDoc(jobRef);
+    console.log('✅ Job deleted from Firestore');
+  } catch (error) {
+    console.error('❌ Error deleting job:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get job statistics for dashboard
+ * 
+ * @param {string} userId - Firebase Auth user ID
+ * @returns {Promise<object>} Job stats
+ */
+export const getJobStats = async (userId) => {
+  try {
+    const jobs = await getUserJobs(userId);
+    
+    const stats = {
+      total: jobs.length,
+      pending: jobs.filter(j => j.status === 'pending').length,
+      processing: jobs.filter(j => j.status === 'processing').length,
+      completed: jobs.filter(j => j.status === 'completed').length,
+      failed: jobs.filter(j => j.status === 'failed').length,
+    };
+    
+    return stats;
+  } catch (error) {
+    console.error('❌ Error calculating job stats:', error);
+    return { total: 0, pending: 0, processing: 0, completed: 0, failed: 0 };
   }
 };

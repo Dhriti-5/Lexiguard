@@ -10,6 +10,7 @@ import {
   Shield,
   AlertTriangle,
   CheckCircle,
+  Zap,
 } from "lucide-react";
 import { motion } from "framer-motion";
 import { saveAnalysis } from "../services/firestoreService";
@@ -18,7 +19,8 @@ export default function Upload() {
   const [file, setFile] = useState(null);
   const [textInput, setTextInput] = useState("");
   const [loading, setLoading] = useState(false);
-  const [analysisType, setAnalysisType] = useState("detailed"); // "standard" or "detailed"
+  const [analysisType, setAnalysisType] = useState("detailed");
+  const [processingMode, setProcessingMode] = useState("sync");
   const navigate = useNavigate();
   const fileInputRef = useRef(null);
   const { currentUser } = useAuth();
@@ -26,7 +28,6 @@ export default function Upload() {
   const handleFileChange = (e) => {
     const selectedFile = e.target.files[0];
     if (selectedFile) {
-      // Validate file type
       const validExtensions = ['pdf', 'docx', 'txt'];
       const fileExtension = selectedFile.name.split('.').pop().toLowerCase();
       
@@ -39,6 +40,69 @@ export default function Upload() {
     }
   };
 
+  // ✅ FIXED: Async upload with proper error handling
+  const handleAsyncAnalyze = async () => {
+    if (!file) {
+      alert("Please upload a file for async processing");
+      return;
+    }
+
+    if (!currentUser) {
+      alert("Please login to use async processing");
+      return;
+    }
+
+    setLoading(true);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("documentTitle", file.name);
+    formData.append("analysisType", analysisType);
+    formData.append("userId", currentUser.uid);
+
+    try {
+      console.log('📤 Uploading file for async processing...');
+      
+      const res = await fetch("http://localhost:8000/analyze-file-async", {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const errorData = await res.json();
+        throw new Error(errorData.detail || `HTTP ${res.status}`);
+      }
+
+      const data = await res.json();
+
+      if (!data.success || !data.jobId) {
+        throw new Error(data.detail || "Upload failed - no job ID returned");
+      }
+
+      console.log('✅ Async upload successful:', data);
+      console.log('   Job ID:', data.jobId);
+      console.log('   Status:', data.status);
+
+      setLoading(false);
+
+      // Navigate to results page with job ID for real-time tracking
+      navigate(`/results/job/${data.jobId}`, { 
+        state: { 
+          jobId: data.jobId,
+          documentTitle: data.documentTitle || file.name,
+          analysisType: analysisType,
+          isAsyncJob: true,
+          userId: currentUser.uid
+        } 
+      });
+    } catch (error) {
+      console.error('❌ Async upload error:', error);
+      setLoading(false);
+      alert(`Upload failed: ${error.message}`);
+    }
+  };
+
+  // EXISTING: Sync upload handler (unchanged)
   const handleAnalyze = async () => {
     if (!file && !textInput.trim()) {
       alert("Please provide text or upload a file");
@@ -55,7 +119,6 @@ export default function Upload() {
     }
 
     try {
-      // Choose endpoint based on analysis type
       const endpoint =
         analysisType === "detailed"
           ? "http://localhost:8000/analyze-clauses"
@@ -74,7 +137,6 @@ export default function Upload() {
         return;
       }
 
-      // Save to Firestore if user is authenticated
       let analysisId = null;
       if (currentUser) {
         try {
@@ -82,13 +144,11 @@ export default function Upload() {
           console.log('✅ Analysis saved to dashboard with ID:', analysisId);
         } catch (error) {
           console.error('⚠️ Failed to save to dashboard:', error);
-          // Continue even if save fails - user can still see results
         }
       }
 
       setLoading(false);
 
-      // Navigate to results - pass analysisId if saved to Firestore
       navigate("/results" + (analysisId ? `/${analysisId}` : ""), { 
         state: { analysis: data, analysisType, analysisId } 
       });
@@ -99,13 +159,19 @@ export default function Upload() {
     }
   };
 
+  const handleSubmit = () => {
+    if (processingMode === "async") {
+      handleAsyncAnalyze();
+    } else {
+      handleAnalyze();
+    }
+  };
+
   return (
     <div className="min-h-screen relative bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] overflow-hidden py-16">
-      {/* Aurora Glow Background */}
       <div className="absolute inset-0 aurora-bg opacity-20" />
 
       <div className="relative max-w-5xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
         <div className="text-center mb-12">
           <motion.h1
             initial={{ opacity: 0, y: 20 }}
@@ -125,7 +191,6 @@ export default function Upload() {
           </motion.p>
         </div>
 
-        {/* Upload Card */}
         <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md mb-12 shadow-2xl">
           <CardHeader>
             <CardTitle className="text-center text-2xl text-white">
@@ -139,7 +204,6 @@ export default function Upload() {
                 Choose Analysis Type:
               </label>
               <div className="grid md:grid-cols-2 gap-4">
-                {/* Standard Analysis Option */}
                 <div
                   onClick={() => setAnalysisType("standard")}
                   className={`cursor-pointer rounded-xl p-6 border-2 transition-all ${
@@ -155,8 +219,7 @@ export default function Upload() {
                         Standard Analysis
                       </h3>
                       <p className="text-gray-300 text-sm leading-relaxed">
-                        Quick summary with basic risk identification and
-                        suggestions
+                        Quick summary with basic risk identification and suggestions
                       </p>
                       <div className="mt-3 flex items-center gap-2">
                         <Clock className="w-4 h-4 text-emerald-400" />
@@ -171,7 +234,6 @@ export default function Upload() {
                   </div>
                 </div>
 
-                {/* Detailed Clause Analysis Option */}
                 <div
                   onClick={() => setAnalysisType("detailed")}
                   className={`cursor-pointer rounded-xl p-6 border-2 transition-all ${
@@ -190,8 +252,7 @@ export default function Upload() {
                         </span>
                       </h3>
                       <p className="text-gray-300 text-sm leading-relaxed">
-                        Deep dive into each risky clause with explanations,
-                        impact, and recommendations
+                        Deep dive into each risky clause with explanations, impact, and recommendations
                       </p>
                       <div className="mt-3 flex items-center gap-2">
                         <Clock className="w-4 h-4 text-emerald-400" />
@@ -208,6 +269,66 @@ export default function Upload() {
               </div>
             </div>
 
+            {/* Processing Mode Selector (only for file uploads) */}
+            {file && currentUser && (
+              <div className="mb-8 p-6 bg-purple-900/20 border-2 border-purple-500/30 rounded-xl">
+                <label className="block text-white text-lg font-semibold mb-4">
+                  Choose Processing Mode:
+                </label>
+                <div className="grid md:grid-cols-2 gap-4">
+                  <div
+                    onClick={() => setProcessingMode("sync")}
+                    className={`cursor-pointer rounded-xl p-4 border-2 transition-all ${
+                      processingMode === "sync"
+                        ? "border-emerald-400 bg-emerald-900/30 shadow-lg shadow-emerald-500/50"
+                        : "border-gray-600 bg-gray-800/30 hover:border-gray-500"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Clock className="w-5 h-5 text-emerald-400" />
+                      <div className="flex-1">
+                        <h4 className="text-white font-bold">Instant</h4>
+                        <p className="text-gray-300 text-xs">Wait for results</p>
+                      </div>
+                      {processingMode === "sync" && (
+                        <CheckCircle className="w-5 h-5 text-emerald-400" />
+                      )}
+                    </div>
+                  </div>
+
+                  <div
+                    onClick={() => setProcessingMode("async")}
+                    className={`cursor-pointer rounded-xl p-4 border-2 transition-all ${
+                      processingMode === "async"
+                        ? "border-purple-400 bg-purple-900/30 shadow-lg shadow-purple-500/50"
+                        : "border-gray-600 bg-gray-800/30 hover:border-gray-500"
+                    }`}
+                  >
+                    <div className="flex items-center gap-3">
+                      <Zap className="w-5 h-5 text-purple-400" />
+                      <div className="flex-1">
+                        <h4 className="text-white font-bold flex items-center gap-2">
+                          Background
+                          <span className="text-xs bg-purple-500 text-white px-1.5 py-0.5 rounded">
+                            BETA
+                          </span>
+                        </h4>
+                        <p className="text-gray-300 text-xs">Upload & go</p>
+                      </div>
+                      {processingMode === "async" && (
+                        <CheckCircle className="w-5 h-5 text-purple-400" />
+                      )}
+                    </div>
+                  </div>
+                </div>
+                <p className="text-gray-400 text-xs mt-3">
+                  {processingMode === "async" 
+                    ? "✨ Upload instantly and check back later for results. Perfect for large documents!"
+                    : "⏱️ Standard processing - you'll wait while analysis completes."}
+                </p>
+              </div>
+            )}
+
             {/* Text Input */}
             <textarea
               value={textInput}
@@ -217,7 +338,7 @@ export default function Upload() {
               className="w-full p-4 border border-gray-700 rounded-lg bg-[#1E1E1E] text-[#EAEAEA] placeholder-gray-500 backdrop-blur-md mb-6"
             />
 
-            {/* File Upload - FIXED: Now accepts .txt files */}
+            {/* File Upload */}
             <div
               className="border-2 border-dashed border-cyan-400/50 rounded-xl p-12 text-center cursor-pointer mb-6 hover:border-cyan-400 transition-colors"
               onClick={() => fileInputRef.current.click()}
@@ -255,7 +376,7 @@ export default function Upload() {
 
             {/* Analyze Button */}
             <Button
-              onClick={handleAnalyze}
+              onClick={handleSubmit}
               className="bg-gradient-to-r from-cyan-600 to-cyan-500 hover:from-cyan-500 hover:to-cyan-400 text-white w-full py-4 text-lg font-semibold shadow-lg shadow-cyan-500/50 transition-all"
               disabled={loading}
             >
@@ -281,12 +402,10 @@ export default function Upload() {
                       d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
                     ></path>
                   </svg>
-                  Analyzing Document...
+                  {processingMode === "async" ? "Uploading..." : "Analyzing Document..."}
                 </span>
               ) : (
-                `Analyze Document (${
-                  analysisType === "detailed" ? "Detailed" : "Standard"
-                })`
+                `${processingMode === "async" ? "Upload & Process in Background" : `Analyze Document (${analysisType === "detailed" ? "Detailed" : "Standard"})`}`
               )}
             </Button>
           </CardContent>

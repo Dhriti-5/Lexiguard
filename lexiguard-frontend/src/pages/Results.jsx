@@ -8,6 +8,8 @@ import BackToTop from "../components/BackToTop";
 import { getAnalysisById } from "../services/firestoreService";
 import LanguageSelector from "../components/LanguageSelector";
 import { getTranslation, requestTranslation } from "../services/firestoreService";
+import JobStatusTracker from "../components/JobStatusTracker";
+import { subscribeToJobStatus } from "../services/firestoreService";
 // REMOVE THIS LINE: import MarkdownRenderer from "../components/MarkdownRenderer";
 import {
   AlertTriangle,
@@ -178,6 +180,12 @@ const [analysis, setAnalysis] = useState(() => {
   const [translatedContent, setTranslatedContent] = useState(null);
   const [translationLoading, setTranslationLoading] = useState(false);
 
+  // NEW: Async job tracking states
+const [isAsyncJob, setIsAsyncJob] = useState(location.state?.isAsyncJob || false);
+const [jobId, setJobId] = useState(location.state?.jobId || null);
+const [jobStatus, setJobStatus] = useState(location.state?.jobStatus || 'pending');
+const [jobData, setJobData] = useState(null);
+
   useEffect(() => {
     if (analysisId && currentUser && !analysis) {
       loadAnalysisFromFirestore();
@@ -205,6 +213,54 @@ useEffect(() => {
     });
   }
 }, [analysis, selectedLanguage, translatedContent, translationLoading, analysisType]);
+
+// NEW: Handle async job tracking
+useEffect(() => {
+  // Check if this is an async job from URL params
+  const pathParts = window.location.pathname.split('/');
+  const isJobPath = pathParts.includes('job');
+  
+  if (isJobPath && pathParts.length >= 4) {
+    const extractedJobId = pathParts[pathParts.length - 1];
+    setIsAsyncJob(true);
+    setJobId(extractedJobId);
+    setJobStatus('pending');
+  }
+}, []);
+
+// NEW: Subscribe to job status updates
+useEffect(() => {
+  if (!isAsyncJob || !jobId || !currentUser) {
+    return;
+  }
+
+  console.log('🔄 Setting up real-time job listener for:', jobId);
+
+  // Subscribe to job status changes in Firestore
+  const unsubscribe = subscribeToJobStatus(jobId, (data) => {
+    if (!data) {
+      console.error('❌ Job not found:', jobId);
+      setJobStatus('failed');
+      return;
+    }
+
+    console.log('📊 Job status update:', data.status);
+    setJobData(data);
+    setJobStatus(data.status);
+
+    // When job completes, load the analysis results
+    if (data.status === 'completed' && data.resultAnalysisId) {
+      console.log('✅ Job completed! Loading analysis:', data.resultAnalysisId);
+      loadCompletedAnalysis(data.resultAnalysisId);
+    }
+  });
+
+  // Cleanup subscription on unmount
+  return () => {
+    console.log('🧹 Cleaning up job listener');
+    unsubscribe();
+  };
+}, [isAsyncJob, jobId, currentUser]);
 
 const loadAnalysisFromFirestore = async () => {
   try {
@@ -247,6 +303,44 @@ const loadAnalysisFromFirestore = async () => {
     setLoading(false);
     alert("Failed to load analysis. Redirecting to dashboard...");
     navigate("/dashboard");
+  }
+};
+
+// NEW: Load completed async analysis
+const loadCompletedAnalysis = async (analysisId) => {
+  try {
+    setLoading(true);
+    console.log('📥 Loading completed analysis:', analysisId);
+    
+    const analysisData = await getAnalysisById(analysisId, currentUser.uid);
+    
+    const transformedAnalysis = {
+      filename: analysisData.originalFilename,
+      file_type: analysisData.fileType,
+      summary: analysisData.summary,
+      risks: analysisData.risks || [],
+      clauses: analysisData.clauses || [],
+      total_risky_clauses: analysisData.total_risky_clauses,
+      pii_redacted: analysisData.piiRedacted,
+      redacted_text: analysisData.redactedDocumentText,
+      redacted_document_text: analysisData.redactedDocumentText,
+      suggestions: analysisData.suggestions || [],
+      fairness_analysis: analysisData.fairness_analysis || [],
+      privacy_notice: analysisData.piiRedacted 
+        ? "✓ Your Personal Data Has Been Redacted for Privacy." 
+        : null,
+    };
+    
+    setAnalysis(transformedAnalysis);
+    setAnalysisType(analysisData.analysisType);
+    setIsAsyncJob(false); // Switch to normal results view
+    setLoading(false);
+    
+    console.log('✅ Analysis loaded successfully');
+  } catch (error) {
+    console.error('❌ Error loading completed analysis:', error);
+    setLoading(false);
+    alert('Failed to load analysis results. Please try again.');
   }
 };
 
@@ -627,6 +721,155 @@ const handleLanguageChange = async (languageCode) => {
       </div>
     );
   }
+
+  // NEW: Show async job status tracker
+if (isAsyncJob && jobStatus !== 'completed') {
+  return (
+    <div className="min-h-screen relative bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] overflow-hidden py-16">
+      <div className="absolute inset-0 aurora-bg opacity-20" />
+
+      <div className="relative max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
+        {/* Header */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="mb-8 text-center"
+        >
+          <h1 className="text-4xl font-bold text-white mb-2">
+            Processing Your Document
+          </h1>
+          <p className="text-gray-300">
+            Your analysis is being processed in the background
+          </p>
+        </motion.div>
+
+        {/* Job Status Tracker */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.2 }}
+        >
+          <JobStatusTracker
+            status={jobStatus}
+            documentTitle={jobData?.documentTitle || location.state?.documentTitle || 'Your Document'}
+            estimatedTime="30-60 seconds"
+            errorMessage={jobData?.errorMessage}
+            onComplete={() => {
+              // This will be handled by the useEffect watching jobStatus
+              console.log('Job completed - results will load automatically');
+            }}
+          />
+        </motion.div>
+
+        {/* What's Happening Card */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.4 }}
+          className="mt-8"
+        >
+          <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+            <CardHeader className="border-b border-gray-700/50">
+              <CardTitle className="text-white text-lg flex items-center gap-2">
+                <FileText className="w-5 h-5 text-cyan-400" />
+                What's Happening Behind the Scenes
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="p-6">
+              <div className="space-y-4">
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-cyan-400 font-bold">1</span>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-semibold mb-1">Secure Upload</h3>
+                    <p className="text-gray-300 text-sm">
+                      Your document is securely stored in Google Cloud Storage
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-purple-400 font-bold">2</span>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-semibold mb-1">PII Redaction</h3>
+                    <p className="text-gray-300 text-sm">
+                      Google DLP API removes personal information for privacy
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-emerald-400 font-bold">3</span>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-semibold mb-1">AI Analysis</h3>
+                    <p className="text-gray-300 text-sm">
+                      Gemini AI analyzes clauses and identifies potential risks
+                    </p>
+                  </div>
+                </div>
+
+                <div className="flex items-start gap-3">
+                  <div className="w-8 h-8 rounded-full bg-yellow-500/20 flex items-center justify-center flex-shrink-0">
+                    <span className="text-yellow-400 font-bold">4</span>
+                  </div>
+                  <div>
+                    <h3 className="text-white font-semibold mb-1">Results Ready</h3>
+                    <p className="text-gray-300 text-sm">
+                      Analysis results are saved and will appear automatically
+                    </p>
+                  </div>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        </motion.div>
+
+        {/* Action Buttons */}
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.6 }}
+          className="mt-8 flex gap-4 justify-center"
+        >
+          <Button
+            onClick={() => navigate('/dashboard')}
+            variant="outline"
+            className="border-cyan-400/50 text-cyan-400 hover:bg-cyan-400/10"
+          >
+            Go to Dashboard
+          </Button>
+          <Button
+            onClick={() => navigate('/upload')}
+            className="bg-cyan-600 hover:bg-cyan-500"
+          >
+            Upload Another Document
+          </Button>
+        </motion.div>
+
+        {/* Info Box */}
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          transition={{ delay: 0.8 }}
+          className="mt-8 text-center"
+        >
+          <div className="inline-flex items-center gap-2 bg-blue-900/30 border border-blue-500/30 rounded-lg px-4 py-2">
+            <Shield className="w-4 h-4 text-blue-400" />
+            <p className="text-blue-200 text-sm">
+              You can safely close this page. Results will be saved to your dashboard.
+            </p>
+          </div>
+        </motion.div>
+      </div>
+    </div>
+  );
+}
+
 
   if (!analysis) {
     return (
@@ -1305,82 +1548,81 @@ const handleLanguageChange = async (languageCode) => {
     );
   }
 
-  // Render Standard Analysis View
-  const summary = displayedContent.summary;
-  const risks = displayedContent.risks;
-  const suggestions = displayedContent.suggestions;
-  const fairnessAnalysis = analysis.fairness_analysis || [];
-  const fileType = analysis.file_type || "Text";
+// Render Standard Analysis View
+const summary = displayedContent.summary;
+const risks = displayedContent.risks;
+const suggestions = displayedContent.suggestions;
+const fairnessAnalysis = analysis.fairness_analysis || [];
+const fileType = analysis.file_type || "Text";
 
-  return (
-    <div className="min-h-screen relative bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] overflow-hidden py-16">
-      <div className="absolute inset-0 aurora-bg opacity-20" />
+return (
+  <div className="min-h-screen relative bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] overflow-hidden py-16">
+    <div className="absolute inset-0 aurora-bg opacity-20" />
 
-      <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header with Language Selector */}
+    <div className="relative max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      {/* Header with Language Selector */}
+      <motion.div
+        initial={{ opacity: 0, y: 20 }}
+        animate={{ opacity: 1, y: 0 }}
+        className="flex items-center justify-between mb-8 flex-wrap gap-4"
+      >
+        <Button
+          onClick={() => navigate("/upload")}
+          variant="outline"
+          className="border-cyan-400/50 text-cyan-400 hover:bg-cyan-400/10"
+        >
+          <ArrowLeft className="w-4 h-4 mr-2" />
+          New Analysis
+        </Button>
+        
+        <div className="flex items-center gap-4">
+          <LanguageSelector
+            selectedLanguage={selectedLanguage}
+            onLanguageChange={handleLanguageChange}
+            loading={translationLoading}
+          />
+          
+          <div className="text-right">
+            <h1 className="text-3xl font-bold text-white mb-1">
+              Standard Analysis Results
+            </h1>
+            <p className="text-gray-300 text-sm">
+              {analysis.filename || "Document"} • {risks.length} risk{risks.length !== 1 ? "s" : ""} identified
+            </p>
+          </div>
+        </div>
+      </motion.div>
+
+      {/* Privacy Notice */}
+      {analysis.privacy_notice && (
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
-          className="flex items-center justify-between mb-8 flex-wrap gap-4"
+          transition={{ delay: 0.05 }}
+          className="mb-6 px-4 py-3 bg-green-700/70 text-green-100 rounded-lg font-medium text-sm flex items-center gap-2"
         >
-          <Button
-            onClick={() => navigate("/upload")}
-            variant="outline"
-            className="border-cyan-400/50 text-cyan-400 hover:bg-cyan-400/10"
-          >
-            <ArrowLeft className="w-4 h-4 mr-2" />
-            New Analysis
-          </Button>
-          
-          <div className="flex items-center gap-4">
-            <LanguageSelector
-              selectedLanguage={selectedLanguage}
-              onLanguageChange={handleLanguageChange}
-              loading={translationLoading}
-            />
-            
-            <div className="text-right">
-              <h1 className="text-3xl font-bold text-white mb-1">
-                Standard Analysis Results
-              </h1>
-              <p className="text-gray-300 text-sm">
-                {analysis.filename || "Document"} • {risks.length} risk{risks.length !== 1 ? "s" : ""} identified
-              </p>
-            </div>
-          </div>
+          <CheckCircle className="w-5 h-5 stroke-current flex-shrink-0" />
+          <span>{analysis.privacy_notice}</span>
         </motion.div>
+      )}
 
-        {/* Privacy Notice */}
-        {analysis.privacy_notice && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.05 }}
-            className="mb-6 px-4 py-3 bg-green-700/70 text-green-100 rounded-lg font-medium text-sm flex items-center gap-2"
-          >
-            <CheckCircle className="w-5 h-5 stroke-current flex-shrink-0" />
-            <span>{analysis.privacy_notice}</span>
-          </motion.div>
-        )}
+      {/* Translation Indicator */}
+      {selectedLanguage !== 'en' && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          transition={{ delay: 0.06 }}
+          className="mb-6 px-4 py-3 bg-blue-700/70 text-blue-100 rounded-lg font-medium text-sm flex items-center gap-2"
+        >
+          <Globe className="w-5 h-5 stroke-current flex-shrink-0" />
+          <span>Content translated to {getLanguageName(selectedLanguage)}</span>
+        </motion.div>
+      )}
 
-        {/* Translation Indicator */}
-        {selectedLanguage !== 'en' && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            transition={{ delay: 0.06 }}
-            className="mb-6 px-4 py-3 bg-blue-700/70 text-blue-100 rounded-lg font-medium text-sm flex items-center gap-2"
-          >
-            <Globe className="w-5 h-5 stroke-current flex-shrink-0" />
-            <span>Content translated to {getLanguageName(selectedLanguage)}</span>
-          </motion.div>
-        )}
-
-        <div className="grid lg:grid-cols-3 gap-8">
-          {/* Main Content - Left Side */}
-          <div className="lg:col-span-2 space-y-6">
-            {/* Summary Card */}
-            {/* Summary Card */}
+      <div className="grid lg:grid-cols-3 gap-8">
+        {/* Main Content - Left Side */}
+        <div className="lg:col-span-2 space-y-6">
+{/* Summary Card */}
 <motion.div
   initial={{ opacity: 0, y: 20 }}
   animate={{ opacity: 1, y: 0 }}
@@ -1394,169 +1636,245 @@ const handleLanguageChange = async (languageCode) => {
       </CardTitle>
     </CardHeader>
     <CardContent className="p-6">
-      <MarkdownRenderer text={summary} />
+      <div className="prose prose-invert max-w-none space-y-4">
+        {summary.split('\n').map((line, index) => {
+          const trimmed = line.trim();
+          if (!trimmed) return null;
+          
+          // Handle ## headings (main sections)
+          if (trimmed.startsWith('## ')) {
+            return (
+              <h2 key={index} className="text-lg font-bold text-cyan-400 mt-6 mb-3 pb-2 border-b border-cyan-400/30">
+                {trimmed.replace('## ', '')}
+              </h2>
+            );
+          }
+          
+          // Handle **Bold:** sub-headings
+          if (trimmed.match(/^\*\*.*\*\*:$/)) {
+            return (
+              <h3 key={index} className="text-base font-semibold text-cyan-300 mt-4 mb-2">
+                {trimmed.replace(/\*\*/g, '')}
+              </h3>
+            );
+          }
+          
+          // Check if it's a bullet point
+          if (trimmed.startsWith('•') || trimmed.match(/^[-*]\s/)) {
+            const content = trimmed.replace(/^[•\-*]\s*/, '');
+            
+            // Process bold text (**text**)
+            const renderWithBold = (text) => {
+              const parts = text.split(/(\*\*.*?\*\*)/g);
+              return parts.map((part, idx) => {
+                if (part.startsWith('**') && part.endsWith('**')) {
+                  const boldText = part.slice(2, -2);
+                  return (
+                    <strong key={idx} className="text-white font-semibold">
+                      {highlightText(boldText)}
+                    </strong>
+                  );
+                }
+                return <span key={idx}>{highlightText(part)}</span>;
+              });
+            };
+            
+            return (
+              <div key={index} className="flex items-start gap-2 ml-4 my-2">
+                <span className="text-cyan-400 mt-1.5 flex-shrink-0">•</span>
+                <span className="text-gray-200 leading-relaxed flex-1">
+                  {renderWithBold(content)}
+                </span>
+              </div>
+            );
+          }
+          
+          // Regular paragraph with bold support
+          const renderWithBold = (text) => {
+            const parts = text.split(/(\*\*.*?\*\*)/g);
+            return parts.map((part, idx) => {
+              if (part.startsWith('**') && part.endsWith('**')) {
+                const boldText = part.slice(2, -2);
+                return (
+                  <strong key={idx} className="text-white font-semibold">
+                    {highlightText(boldText)}
+                  </strong>
+                );
+              }
+              return <span key={idx}>{highlightText(part)}</span>;
+            });
+          };
+          
+          return (
+            <p key={index} className="text-gray-200 leading-relaxed">
+              {renderWithBold(trimmed)}
+            </p>
+          );
+        })}
+      </div>
     </CardContent>
   </Card>
 </motion.div>
-            {/* Risks Card */}
+
+          {/* Risks Card */}
+                    {/* Risks Card */}
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: 0.2 }}
+          >
+            <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+              <CardHeader className="border-b border-gray-700/50">
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <AlertTriangle className="w-5 h-5 text-red-400" />
+                  Identified Risks ({risks.length})
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="p-6">
+                {risks.length === 0 ? (
+                  <div className="flex items-center gap-3 text-emerald-400 bg-emerald-900/20 p-4 rounded-lg border border-emerald-500/30">
+                    <CheckCircle className="w-5 h-5" />
+                    <span>No significant risks detected in this document.</span>
+                  </div>
+                ) : (
+                  <div className="space-y-4">
+                    {risks.map((risk, index) => (
+                      <div
+                        key={index}
+                        className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 hover:border-cyan-400/50 transition-all"
+                      >
+                        <div className="flex items-start justify-between gap-4 mb-3">
+                          <div className="flex-1">
+                            <div className="flex items-center gap-2 mb-2">
+                              <span
+                                className={`px-3 py-1 rounded-full text-xs font-semibold border ${getRiskBadge(
+                                  risk.severity
+                                )}`}
+                              >
+                                {risk.severity} Risk
+                              </span>
+                            </div>
+                            <p className="text-gray-300 text-sm italic mb-2 bg-black/30 p-3 rounded border border-gray-700/50">
+                              "{risk.clause_text}"
+                            </p>
+                            <p className="text-gray-200 text-sm">
+                              {risk.risk_explanation}
+                            </p>
+                          </div>
+                        </div>
+                        
+                        <Button
+                          onClick={() => handleGenerateNegotiation(risk.clause_text)}
+                          size="sm"
+                          className="bg-cyan-600 hover:bg-cyan-500 text-white mt-2"
+                        >
+                          <Mail className="w-4 h-4 mr-2" />
+                          Draft Negotiation Email
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          </motion.div>
+
+          {/* Suggested Actions Card */}
+          {suggestions.length > 0 && (
             <motion.div
               initial={{ opacity: 0, y: 20 }}
               animate={{ opacity: 1, y: 0 }}
-              transition={{ delay: 0.2 }}
+              transition={{ delay: 0.25 }}
             >
               <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
                 <CardHeader className="border-b border-gray-700/50">
                   <CardTitle className="flex items-center gap-2 text-white">
-                    <AlertTriangle className="w-5 h-5 text-red-400" />
-                    Identified Risks ({risks.length})
+                    <TrendingUp className="w-5 h-5 text-emerald-400" />
+                    Suggested Actions
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-6">
-                  {risks.length === 0 ? (
-                    <div className="flex items-center gap-3 text-emerald-400 bg-emerald-900/20 p-4 rounded-lg border border-emerald-500/30">
-                      <CheckCircle className="w-5 h-5" />
-                      <span>No significant risks detected in this document.</span>
-                    </div>
-                  ) : (
-                    <div className="space-y-4">
-                      {risks.map((risk, index) => (
-                        <div
-                          key={index}
-                          className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 hover:border-cyan-400/50 transition-all"
-                        >
-                          <div className="flex items-start justify-between gap-4 mb-3">
-                            <div className="flex-1">
-                              <div className="flex items-center gap-2 mb-2">
-                                <span
-                                  className={`px-3 py-1 rounded-full text-xs font-semibold border ${getRiskBadge(
-                                    risk.severity
-                                  )}`}
-                                >
-                                  {risk.severity} Risk
-                                </span>
-                              </div>
-                              <p className="text-gray-300 text-sm italic mb-2 bg-black/30 p-3 rounded border border-gray-700/50">
-                                "{risk.clause_text}"
-                              </p>
-                              <p className="text-gray-200 text-sm">
-                                {risk.risk_explanation}
-                              </p>
-                            </div>
-                          </div>
-                          
-                          <Button
-                            onClick={() => handleGenerateNegotiation(risk.clause_text)}
-                            size="sm"
-                            className="bg-cyan-600 hover:bg-cyan-500 text-white mt-2"
-                          >
-                            <Mail className="w-4 h-4 mr-2" />
-                            Draft Negotiation Email
-                          </Button>
-                        </div>
-                      ))}
-                    </div>
-                  )}
+                  <div className="space-y-3">
+                    {suggestions.map((suggestion, index) => (
+                      <div
+                        key={index}
+                        className="flex items-start gap-3 bg-emerald-900/20 border border-emerald-500/30 p-4 rounded-lg"
+                      >
+                        <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                        <p className="text-gray-200 text-sm">{highlightText(suggestion)}</p>
+                      </div>
+                    ))}
+                  </div>
                 </CardContent>
               </Card>
             </motion.div>
+          )}
 
-            {/* Fairness Analysis */}
-            {fairnessAnalysis.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.3 }}
-              >
-                <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
-                  <CardHeader className="border-b border-gray-700/50">
-                    <CardTitle className="flex items-center gap-2 text-white">
-                      <Scale className="w-5 h-5 text-purple-400" />
-                      Fairness Analysis
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-6 space-y-6">
-                    {fairnessAnalysis.map((item, index) => (
-                      <div key={index} className="border border-gray-700 rounded-lg p-4 bg-gray-800/30">
-                        <div className="mb-4">
-                          <div className="flex items-center gap-3 mb-2">
-                            <span className="text-sm font-semibold text-gray-400">Fairness Score:</span>
-                            <div className="flex items-center gap-2">
-                              <div className="w-32 h-2 bg-gray-700 rounded-full overflow-hidden">
-                                <div
-                                  className={`h-full ${
-                                    item.fairness_score >= 70
-                                      ? "bg-emerald-500"
-                                      : item.fairness_score >= 40
-                                      ? "bg-yellow-500"
-                                      : "bg-red-500"
-                                  }`}
-                                  style={{ width: `${item.fairness_score}%` }}
-                                />
-                              </div>
-                              <span className="text-white font-bold">{item.fairness_score}/100</span>
+          {/* Fairness Analysis */}
+          {fairnessAnalysis.length > 0 && (
+            <motion.div
+              initial={{ opacity: 0, y: 20 }}
+              animate={{ opacity: 1, y: 0 }}
+              transition={{ delay: 0.3 }}
+            >
+              <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+                <CardHeader className="border-b border-gray-700/50">
+                  <CardTitle className="flex items-center gap-2 text-white">
+                    <Scale className="w-5 h-5 text-purple-400" />
+                    Fairness Analysis
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="p-6 space-y-6">
+                  {fairnessAnalysis.map((item, index) => (
+                    <div key={index} className="border border-gray-700 rounded-lg p-4 bg-gray-800/30">
+                      <div className="mb-4">
+                        <div className="flex items-center gap-3 mb-2">
+                          <span className="text-sm font-semibold text-gray-400">Fairness Score:</span>
+                          <div className="flex items-center gap-2">
+                            <div className="w-32 h-2 bg-gray-700 rounded-full overflow-hidden">
+                              <div
+                                className={`h-full ${
+                                  item.fairness_score >= 70
+                                    ? "bg-emerald-500"
+                                    : item.fairness_score >= 40
+                                    ? "bg-yellow-500"
+                                    : "bg-red-500"
+                                }`}
+                                style={{ width: `${item.fairness_score}%` }}
+                              />
                             </div>
-                          </div>
-                        </div>
-
-                        <div className="space-y-3">
-                          <div>
-                            <h4 className="text-sm font-semibold text-red-400 mb-1">Risky Clause:</h4>
-                            <p className="text-gray-300 text-sm italic bg-red-900/20 p-2 rounded border border-red-500/30">
-                              "{item.risky_clause}"
-                            </p>
-                          </div>
-
-                          <div>
-                            <h4 className="text-sm font-semibold text-emerald-400 mb-1">Suggested Standard Clause:</h4>
-                            <p className="text-gray-300 text-sm bg-emerald-900/20 p-2 rounded border border-emerald-500/30">
-                              {item.standard_clause}
-                            </p>
-                          </div>
-
-                          <div>
-                            <h4 className="text-sm font-semibold text-blue-400 mb-1">Explanation:</h4>
-                            <p className="text-gray-200 text-sm">{item.explanation}</p>
+                            <span className="text-white font-bold">{item.fairness_score}/100</span>
                           </div>
                         </div>
                       </div>
-                    ))}
-                  </CardContent>
-                </Card>
-              </motion.div>
-            )}
 
-            {/* Suggestions Card */}
-            {suggestions.length > 0 && (
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ delay: 0.4 }}
-              >
-                <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
-                  <CardHeader className="border-b border-gray-700/50">
-                    <CardTitle className="flex items-center gap-2 text-white">
-                      <TrendingUp className="w-5 h-5 text-emerald-400" />
-                      Suggested Actions
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="p-6">
-                    <div className="space-y-3">
-                      {suggestions.map((suggestion, index) => (
-                        <div
-                          key={index}
-                          className="flex items-start gap-3 bg-emerald-900/20 border border-emerald-500/30 p-4 rounded-lg"
-                        >
-                          <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
-                          <p className="text-gray-200 text-sm">{highlightText(suggestion)}</p>
+                      <div className="space-y-3">
+                        <div>
+                          <h4 className="text-sm font-semibold text-red-400 mb-1">Risky Clause:</h4>
+                          <p className="text-gray-300 text-sm italic bg-red-900/20 p-2 rounded border border-red-500/30">
+                            "{item.risky_clause}"
+                          </p>
                         </div>
-                      ))}
-                    </div>
-                  </CardContent>
-                </Card>
-              </motion.div>
-            )}
-          </div>
 
+                        <div>
+                          <h4 className="text-sm font-semibold text-emerald-400 mb-1">Suggested Standard Clause:</h4>
+                          <p className="text-gray-300 text-sm bg-emerald-900/20 p-2 rounded border border-emerald-500/30">
+                            {item.standard_clause}
+                          </p>
+                        </div>
+
+                        <div>
+                          <h4 className="text-sm font-semibold text-blue-400 mb-1">Explanation:</h4>
+                          <p className="text-gray-200 text-sm">{item.explanation}</p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </CardContent>
+              </Card>
+            </motion.div>
+          )}
+        </div>
           {/* Sidebar - Right Side */}
           <div className="space-y-6">
             <motion.div
