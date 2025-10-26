@@ -143,7 +143,7 @@ export default function Upload() {
           analysisId = await saveAnalysis(currentUser.uid, data);
           console.log('✅ Analysis saved to dashboard with ID:', analysisId);
         } catch (error) {
-          console.error('⚠️ Failed to save to dashboard:', error);
+          console.error('⚠ Failed to save to dashboard:', error);
         }
       }
 
@@ -324,7 +324,7 @@ export default function Upload() {
                 <p className="text-gray-400 text-xs mt-3">
                   {processingMode === "async" 
                     ? "✨ Upload instantly and check back later for results. Perfect for large documents!"
-                    : "⏱️ Standard processing - you'll wait while analysis completes."}
+                    : "⏱ Standard processing - you'll wait while analysis completes."}
                 </p>
               </div>
             )}

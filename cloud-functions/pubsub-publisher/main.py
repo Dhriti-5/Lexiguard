@@ -1,12 +1,9 @@
-﻿import json
-import logging
-import os
-import base64
+﻿import functions_framework
 from google.cloud import pubsub_v1
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
+from google.events.cloud import firestore
+from cloudevents.http import CloudEvent
+import os
+import json
 
 # Initialize Pub/Sub publisher
 publisher = pubsub_v1.PublisherClient()
@@ -14,88 +11,65 @@ PROJECT_ID = os.getenv("GOOGLE_CLOUD_PROJECT", "lexiguard-475609")
 TOPIC_NAME = "lexiguard-analysis-jobs"
 topic_path = publisher.topic_path(PROJECT_ID, TOPIC_NAME)
 
-logger.info(f"📋 Cloud Function initialized")
-logger.info(f"   Project: {PROJECT_ID}")
-logger.info(f"   Topic: {topic_path}")
+print(f"📋 Cloud Function initialized")
+print(f"   Project: {PROJECT_ID}")
+print(f"   Topic: {topic_path}")
 
-def publish_analysis_job(event, context):
+@functions_framework.cloud_event
+def publish_analysis_job(cloud_event: CloudEvent):
     """
     Triggered by Firestore onCreate event on analysisJobs collection.
     Publishes job details to Pub/Sub for worker processing.
-    
-    Args:
-        event: The Firestore event (CloudEvent format - bytes or dict)
-        context: The Cloud Functions context
     """
     try:
-        logger.info("=" * 80)
-        logger.info("🔔 Firestore trigger activated")
-        logger.info(f"   Context resource: {context.resource if context else 'None'}")
-
-        # ✅ STEP 1: Decode event safely
-        event_dict = None
-        if isinstance(event, bytes):
-            try:
-                # Attempt base64 decode (CloudEvent Gen2 standard)
-                decoded = base64.b64decode(event).decode("utf-8")
-                event_dict = json.loads(decoded)
-                logger.info("   Successfully decoded base64 Firestore event")
-            except Exception as e:
-                logger.warning(f"⚠️ Base64 decode failed, trying UTF-8 decode fallback: {e}")
-                try:
-                    event_dict = json.loads(event.decode("utf-8"))
-                    logger.info("   Successfully decoded UTF-8 bytes event")
-                except Exception as e2:
-                    logger.error(f"❌ Unable to decode Firestore event: {e2}")
-                    return
-        elif isinstance(event, dict):
-            event_dict = event
-            logger.info("   Event is already dict")
-        else:
-            logger.error(f"❌ Unexpected event type: {type(event)}")
-            return
-
-        logger.info(f"   Event keys: {list(event_dict.keys()) if isinstance(event_dict, dict) else 'N/A'}")
-
-        # ✅ STEP 2: Parse Firestore document fields
-        fields = {}
-        try:
-            if "data" in event_dict:
-                data_section = event_dict["data"]
-                if isinstance(data_section, str):
-                    data_section = json.loads(data_section)
-                value_section = data_section.get("value", {})
-                fields = value_section.get("fields", {})
-                logger.info(f"   Found {len(fields)} fields in document")
-            elif "value" in event_dict and "fields" in event_dict["value"]:
-                fields = event_dict["value"]["fields"]
-                logger.info("   Using legacy Firestore event format")
-            else:
-                logger.error(f"❌ Cannot find Firestore fields in event structure")
-                logger.error(f"   Available keys: {event_dict.keys()}")
-                return
-        except Exception as parse_error:
-            logger.error(f"❌ Failed to parse event structure: {parse_error}")
-            logger.error(f"   Event dict (truncated): {json.dumps(event_dict, indent=2)[:500]} ...")
-            return
-
-        # ✅ STEP 3: Extract typed Firestore fields
+        print("=" * 80)
+        print("🔔 Firestore trigger activated")
+        print(f"   Event type: {cloud_event['type']}")
+        print(f"   Event source: {cloud_event['source']}")
+        
+        # Parse Firestore document data from Protobuf
+        firestore_payload = firestore.DocumentEventData()
+        firestore_payload._pb.ParseFromString(cloud_event.data)
+        
+        # Get the document that was created
+        document = firestore_payload.value
+        fields = document.fields
+        
+        # Extract document ID from the event subject
+        subject = cloud_event.get("subject", "")
+        doc_id = subject.split("/")[-1] if subject else None
+        
+        print(f"   Document ID: {doc_id}")
+        print(f"   Fields count: {len(fields)}")
+        
+        # Helper function to extract Firestore field values
         def get_field_value(field_name, default=""):
-            field = fields.get(field_name, {})
-            if not isinstance(field, dict):
-                return str(field) if field else default
-            if "stringValue" in field:
-                return field["stringValue"]
-            if "integerValue" in field:
-                return int(field["integerValue"])
-            if "booleanValue" in field:
-                return field["booleanValue"]
-            if "timestampValue" in field:
-                return field["timestampValue"]
-            return default
-
+            if field_name not in fields:
+                return default
+            
+            field = fields[field_name]
+            
+            # The field object has different value types as attributes
+            # We check which one is set (non-empty)
+            if field.string_value:
+                return field.string_value
+            elif field.integer_value:
+                return int(field.integer_value)
+            elif field.double_value:
+                return field.double_value
+            # boolean_value can be False, so check explicitly
+            elif hasattr(field, 'boolean_value'):
+                return field.boolean_value
+            elif field.timestamp_value:
+                # Convert timestamp to ISO string
+                ts = field.timestamp_value
+                return ts.ToJsonString() if hasattr(ts, 'ToJsonString') else str(ts)
+            else:
+                return default
+        
+        # Extract job data
         job_message = {
-            "jobId": get_field_value("jobId"),
+            "jobId": get_field_value("jobId") or doc_id,
             "userID": get_field_value("userID"),
             "documentTitle": get_field_value("documentTitle"),
             "originalFilename": get_field_value("originalFilename"),
@@ -104,38 +78,39 @@ def publish_analysis_job(event, context):
             "analysisType": get_field_value("analysisType", "standard"),
             "status": get_field_value("status"),
         }
-
-        logger.info(f"📦 Extracted job details: {json.dumps(job_message, indent=2)}")
-
-        # ✅ STEP 4: Skip non-pending jobs
+        
+        print(f"📦 Extracted job details:")
+        print(json.dumps(job_message, indent=2))
+        
+        # Only process pending jobs
         if job_message["status"] != "pending":
-            logger.info(f"⏭️ Skipping - status is '{job_message['status']}'")
+            print(f"⏭️ Skipping - status is '{job_message['status']}'")
             return
-
-        # ✅ STEP 5: Validate required fields
+        
+        # Validate required fields
         required = ["jobId", "userID", "gcsPath", "fileType"]
         missing = [f for f in required if not job_message.get(f)]
         if missing:
-            logger.error(f"❌ Missing required fields: {missing}")
+            print(f"❌ Missing required fields: {missing}")
             return
-
-        # ✅ STEP 6: Publish to Pub/Sub
+        
+        # Publish to Pub/Sub
         message_bytes = json.dumps(job_message).encode("utf-8")
-        logger.info("📤 Publishing to Pub/Sub...")
-
+        print("📤 Publishing to Pub/Sub...")
+        
         future = publisher.publish(topic_path, message_bytes)
         message_id = future.result(timeout=30)
-
-        logger.info(f"✅ Successfully published to Pub/Sub!")
-        logger.info(f"   Message ID: {message_id}")
-        logger.info(f"   Job ID: {job_message['jobId']}")
-        logger.info("=" * 80)
-
+        
+        print(f"✅ Successfully published to Pub/Sub!")
+        print(f"   Message ID: {message_id}")
+        print(f"   Job ID: {job_message['jobId']}")
+        print("=" * 80)
+        
     except Exception as e:
-        logger.error("=" * 80)
-        logger.error(f"❌ Error in publish_analysis_job: {e}")
-        logger.error(f"   Type: {type(e).__name__}")
+        print("=" * 80)
+        print(f"❌ Error in publish_analysis_job: {e}")
+        print(f"   Type: {type(e).__name__}")
         import traceback
-        logger.error(traceback.format_exc())
-        logger.error("=" * 80)
+        print(traceback.format_exc())
+        print("=" * 80)
         return

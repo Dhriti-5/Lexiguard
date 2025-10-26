@@ -1,3 +1,5 @@
 ﻿functions-framework==3.*
 google-cloud-pubsub==2.18.4
-google-cloud-firestore==2.14.0
+google-events==0.12.0
+cloudevents==1.10.1
+protobuf==4.25.1
