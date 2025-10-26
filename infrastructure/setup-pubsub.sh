@@ -1,172 +1,161 @@
 #!/bin/bash
 
-# ========================================
-# LexiGuard Infrastructure Setup Script
-# ========================================
-# This script sets up all required Google Cloud resources
-# Run this ONCE before deploying Cloud Functions and Cloud Run
+# Setup Pub/Sub infrastructure for LexiGuard async processing
+# Creates topic and subscription with proper IAM permissions
 
-set -e  # Exit on any error
+set -e
 
-# ========================================
-# Configuration Variables
-# ========================================
-PROJECT_ID="lexiguard-475609"  # REPLACE WITH YOUR PROJECT ID
-REGION="us-central1"           # Change if needed
-BUCKET_NAME="lexiguard-documents"
-TOPIC_NAME="document-analysis-jobs"
-SUBSCRIPTION_NAME="document-analysis-worker"
-SERVICE_ACCOUNT_NAME="lexiguard-worker"
-
-echo "🚀 Starting LexiGuard Infrastructure Setup..."
-echo "Project ID: $PROJECT_ID"
-echo "Region: $REGION"
-
-# ========================================
-# 1. Set active project
-# ========================================
+echo "🚀 Setting up LexiGuard Pub/Sub Infrastructure..."
 echo ""
-echo "📌 Step 1: Setting active project..."
+
+# Configuration
+PROJECT_ID="lexiguard-475609"
+SERVICE_ACCOUNT="372716482731-compute@developer.gserviceaccount.com"
+TOPIC_NAME="lexiguard-analysis-jobs"
+SUBSCRIPTION_NAME="lexiguard-analysis-jobs-sub"
+
+echo "📋 Configuration:"
+echo "   Project: $PROJECT_ID"
+echo "   Topic: $TOPIC_NAME"
+echo "   Subscription: $SUBSCRIPTION_NAME"
+echo "   Service Account: $SERVICE_ACCOUNT"
+echo ""
+
+# Set active project
 gcloud config set project $PROJECT_ID
 
-# ========================================
-# 2. Enable required APIs
-# ========================================
+# Step 1: Enable required APIs
+echo "📦 Enabling required APIs..."
+gcloud services enable \
+  pubsub.googleapis.com \
+  run.googleapis.com \
+  cloudfunctions.googleapis.com \
+  firestore.googleapis.com \
+  storage.googleapis.com \
+  dlp.googleapis.com
+
+echo "✅ APIs enabled"
 echo ""
-echo "📌 Step 2: Enabling required Google Cloud APIs..."
-gcloud services enable cloudfunctions.googleapis.com
-gcloud services enable run.googleapis.com
-gcloud services enable pubsub.googleapis.com
-gcloud services enable storage.googleapis.com
-gcloud services enable dlp.googleapis.com
-gcloud services enable firestore.googleapis.com
-gcloud services enable cloudbuild.googleapis.com
 
-echo "✅ APIs enabled successfully"
-
-# ========================================
-# 3. Create Cloud Storage bucket
-# ========================================
-echo ""
-echo "📌 Step 3: Creating Cloud Storage bucket..."
-if gsutil ls -b gs://$BUCKET_NAME 2>/dev/null; then
-    echo "⚠️  Bucket already exists: gs://$BUCKET_NAME"
-else
-    gsutil mb -p $PROJECT_ID -l $REGION gs://$BUCKET_NAME
-    echo "✅ Bucket created: gs://$BUCKET_NAME"
-fi
-
-# Create folder structure
-gsutil mkdir gs://$BUCKET_NAME/uploads/ || true
-gsutil mkdir gs://$BUCKET_NAME/processed/ || true
-
-# ========================================
-# 4. Create Pub/Sub Topic
-# ========================================
-echo ""
-echo "📌 Step 4: Creating Pub/Sub topic..."
-if gcloud pubsub topics describe $TOPIC_NAME 2>/dev/null; then
-    echo "⚠️  Topic already exists: $TOPIC_NAME"
+# Step 2: Create Pub/Sub topic (if not exists)
+echo "📝 Creating Pub/Sub topic..."
+if gcloud pubsub topics describe $TOPIC_NAME &>/dev/null; then
+    echo "   Topic already exists: $TOPIC_NAME"
 else
     gcloud pubsub topics create $TOPIC_NAME
-    echo "✅ Topic created: $TOPIC_NAME"
+    echo "   ✅ Topic created: $TOPIC_NAME"
 fi
-
-# ========================================
-# 5. Create Pub/Sub Subscription
-# ========================================
 echo ""
-echo "📌 Step 5: Creating Pub/Sub subscription..."
-if gcloud pubsub subscriptions describe $SUBSCRIPTION_NAME 2>/dev/null; then
-    echo "⚠️  Subscription already exists: $SUBSCRIPTION_NAME"
-else
+
+# Step 3: Grant IAM permissions to service account
+echo "🔐 Setting up IAM permissions..."
+
+# Publisher role (for Cloud Function)
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SERVICE_ACCOUNT" \
+  --role="roles/pubsub.publisher" \
+  --condition=None \
+  --quiet
+
+echo "   ✅ Granted Pub/Sub Publisher role"
+
+# Subscriber role (for Cloud Run)
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SERVICE_ACCOUNT" \
+  --role="roles/pubsub.subscriber" \
+  --condition=None \
+  --quiet
+
+echo "   ✅ Granted Pub/Sub Subscriber role"
+
+# Storage Object Viewer (to read uploaded files)
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SERVICE_ACCOUNT" \
+  --role="roles/storage.objectViewer" \
+  --condition=None \
+  --quiet
+
+echo "   ✅ Granted Storage Object Viewer role"
+
+# Firestore User (to read/write Firestore)
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SERVICE_ACCOUNT" \
+  --role="roles/datastore.user" \
+  --condition=None \
+  --quiet
+
+echo "   ✅ Granted Datastore User role"
+
+# DLP User (for PII redaction)
+gcloud projects add-iam-policy-binding $PROJECT_ID \
+  --member="serviceAccount:$SERVICE_ACCOUNT" \
+  --role="roles/dlp.user" \
+  --condition=None \
+  --quiet
+
+echo "   ✅ Granted DLP User role"
+echo ""
+
+# Step 4: Check if Cloud Run service exists
+echo "🔍 Checking if Cloud Run worker is deployed..."
+REGION="us-central1"
+SERVICE_NAME="lexiguard-worker"
+
+if gcloud run services describe $SERVICE_NAME --region=$REGION &>/dev/null; then
+    echo "   ✅ Cloud Run service found"
+    
+    # Get service URL
+    SERVICE_URL=$(gcloud run services describe $SERVICE_NAME \
+      --region=$REGION \
+      --format='value(status.url)')
+    
+    echo "   Service URL: $SERVICE_URL"
+    echo ""
+    
+    # Step 5: Create or update Pub/Sub subscription
+    echo "📮 Creating Pub/Sub push subscription..."
+    
+    if gcloud pubsub subscriptions describe $SUBSCRIPTION_NAME &>/dev/null; then
+        echo "   ⚠️  Subscription already exists, deleting old one..."
+        gcloud pubsub subscriptions delete $SUBSCRIPTION_NAME --quiet
+    fi
+    
     gcloud pubsub subscriptions create $SUBSCRIPTION_NAME \
-        --topic=$TOPIC_NAME \
-        --ack-deadline=600 \
-        --message-retention-duration=7d
-    echo "✅ Subscription created: $SUBSCRIPTION_NAME"
-fi
-
-# ========================================
-# 6. Create Service Account
-# ========================================
-echo ""
-echo "📌 Step 6: Creating service account for Cloud Run worker..."
-SERVICE_ACCOUNT_EMAIL="${SERVICE_ACCOUNT_NAME}@${PROJECT_ID}.iam.gserviceaccount.com"
-
-if gcloud iam service-accounts describe $SERVICE_ACCOUNT_EMAIL 2>/dev/null; then
-    echo "⚠️  Service account already exists: $SERVICE_ACCOUNT_EMAIL"
+      --topic=$TOPIC_NAME \
+      --push-endpoint="$SERVICE_URL" \
+      --push-auth-service-account="$SERVICE_ACCOUNT" \
+      --ack-deadline=600 \
+      --message-retention-duration=7d \
+      --quiet
+    
+    echo "   ✅ Subscription created: $SUBSCRIPTION_NAME"
+    echo ""
+    
 else
-    gcloud iam service-accounts create $SERVICE_ACCOUNT_NAME \
-        --display-name="LexiGuard Worker Service Account"
-    echo "✅ Service account created: $SERVICE_ACCOUNT_EMAIL"
+    echo "   ⚠️  Cloud Run service not deployed yet"
+    echo ""
+    echo "   Deploy the worker first using:"
+    echo "   cd cloud-run-worker && bash deploy.sh"
+    echo ""
+    echo "   Then run this script again to create the subscription"
+    echo ""
+    exit 0
 fi
 
-# ========================================
-# 7. Grant IAM Permissions
-# ========================================
+# Step 6: Verify setup
+echo "✅ Infrastructure setup complete!"
 echo ""
-echo "📌 Step 7: Granting IAM permissions..."
-
-# Permissions for Cloud Run worker
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/pubsub.subscriber" \
-    --quiet
-
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/storage.objectAdmin" \
-    --quiet
-
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/datastore.user" \
-    --quiet
-
-gcloud projects add-iam-policy-binding $PROJECT_ID \
-    --member="serviceAccount:$SERVICE_ACCOUNT_EMAIL" \
-    --role="roles/dlp.user" \
-    --quiet
-
-echo "✅ IAM permissions granted"
-
-# ========================================
-# 8. Create service account key (for local testing)
-# ========================================
+echo "📊 Verification:"
 echo ""
-echo "📌 Step 8: Creating service account key for local development..."
-KEY_FILE="./lexiguard-service-account-key.json"
-
-if [ -f "$KEY_FILE" ]; then
-    echo "⚠️  Key file already exists: $KEY_FILE"
-else
-    gcloud iam service-accounts keys create $KEY_FILE \
-        --iam-account=$SERVICE_ACCOUNT_EMAIL
-    echo "✅ Service account key created: $KEY_FILE"
-    echo "⚠️  IMPORTANT: Keep this key secure and never commit it to Git!"
-fi
-
-# ========================================
-# Summary
-# ========================================
+echo "1. Topic created:"
+echo "   gcloud pubsub topics list | grep $TOPIC_NAME"
 echo ""
-echo "=========================================="
-echo "✅ Infrastructure Setup Complete!"
-echo "=========================================="
+echo "2. Subscription created:"
+echo "   gcloud pubsub subscriptions list | grep $SUBSCRIPTION_NAME"
 echo ""
-echo "📋 Resources Created:"
-echo "  • Cloud Storage Bucket: gs://$BUCKET_NAME"
-echo "  • Pub/Sub Topic: $TOPIC_NAME"
-echo "  • Pub/Sub Subscription: $SUBSCRIPTION_NAME"
-echo "  • Service Account: $SERVICE_ACCOUNT_EMAIL"
+echo "3. Test the setup by uploading a document via the frontend"
 echo ""
-echo "📝 Next Steps:"
-echo "  1. Update shared/constants.py with your PROJECT_ID and BUCKET_NAME"
-echo "  2. Deploy Cloud Function: cd cloud-functions/pubsub-publisher && ./deploy.sh"
-echo "  3. Deploy Cloud Run Worker: cd cloud-run-worker && ./deploy.sh"
-echo "  4. Update backend .env file with new environment variables"
-echo ""
-echo "🔑 Service Account Key: $KEY_FILE"
-echo "   Set this in GOOGLE_APPLICATION_CREDENTIALS environment variable"
+echo "4. Monitor logs:"
+echo "   Cloud Function: gcloud functions logs read lexiguard-job-publisher --gen2 --limit=20"
+echo "   Cloud Run: gcloud run logs read $SERVICE_NAME --limit=20"
 echo ""

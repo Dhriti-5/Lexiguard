@@ -1,136 +1,112 @@
 #!/bin/bash
 
-# ========================================
-# Deploy Cloud Run Worker (Source-based, No Docker)
-# ========================================
-# This deploys directly from source code using Cloud Build
+# Deploy Cloud Run Worker for document processing
+# Uses source-based deployment (NO Docker required)
+# Cloud Run will automatically build from source code
 
 set -e
+
+echo "🚀 Deploying LexiGuard Cloud Run Worker (Source-based)..."
 
 # Configuration
 PROJECT_ID="lexiguard-475609"
 REGION="us-central1"
 SERVICE_NAME="lexiguard-worker"
-SERVICE_ACCOUNT="372716482731-compute@developer.gserviceaccount.com"  # ✅ YOUR SERVICE ACCOUNT
-BUCKET_NAME="lexiguard-documents"
-PUBSUB_SUBSCRIPTION="document-analysis-worker"
-PUBSUB_TOPIC="document-analysis-jobs"
+SERVICE_ACCOUNT="372716482731-compute@developer.gserviceaccount.com"
 
-echo "=========================================="
-echo "🚀 Deploying Cloud Run Worker"
-echo "=========================================="
-echo "Project: $PROJECT_ID"
-echo "Region: $REGION"
-echo "Service: $SERVICE_NAME"
-echo "Service Account: $SERVICE_ACCOUNT"
-echo ""
+# ⚠️ IMPORTANT: Set your Gemini API key here
+# Get it from: https://makersuite.google.com/app/apikey
+read -p "Enter your Gemini API Key: " GEMINI_API_KEY
 
-# Get Gemini API Key from environment or prompt
 if [ -z "$GEMINI_API_KEY" ]; then
-    echo "⚠️  GEMINI_API_KEY not found in environment"
-    echo ""
-    read -p "Enter your Gemini API Key: " GEMINI_API_KEY
-    
-    if [ -z "$GEMINI_API_KEY" ]; then
-        echo "❌ Error: Gemini API Key is required"
-        exit 1
-    fi
+    echo "❌ ERROR: Gemini API key is required"
+    echo "   Get your API key from: https://makersuite.google.com/app/apikey"
+    exit 1
 fi
 
 echo ""
-echo "📦 Step 1: Deploying Cloud Run service from source..."
+echo "📋 Configuration:"
+echo "   Project: $PROJECT_ID"
+echo "   Region: $REGION"
+echo "   Service: $SERVICE_NAME"
+echo "   Service Account: $SERVICE_ACCOUNT"
+echo "   Bucket: lexiguard-documents"
 echo ""
 
-# Deploy from source (no Dockerfile needed - uses Cloud Build buildpacks)
+# Verify we're in the correct directory
+if [ ! -f "main.py" ] || [ ! -f "requirements.txt" ]; then
+    echo "❌ ERROR: main.py or requirements.txt not found"
+    echo "   Make sure you're in the cloud-run-worker directory"
+    exit 1
+fi
+
+echo "✅ Found main.py and requirements.txt"
+echo ""
+
+# Deploy to Cloud Run using source deployment
+echo "📦 Deploying to Cloud Run (this may take 2-3 minutes)..."
+echo ""
+
 gcloud run deploy $SERVICE_NAME \
-    --source=. \
-    --platform=managed \
-    --region=$REGION \
-    --project=$PROJECT_ID \
-    --service-account=$SERVICE_ACCOUNT \
-    --set-env-vars="GCP_PROJECT=$PROJECT_ID,GCS_BUCKET_NAME=$BUCKET_NAME,GEMINI_API_KEY=$GEMINI_API_KEY" \
-    --memory=2Gi \
-    --cpu=2 \
-    --timeout=600 \
-    --concurrency=10 \
-    --min-instances=0 \
-    --max-instances=10 \
-    --no-allow-unauthenticated
+  --source=. \
+  --platform=managed \
+  --region=$REGION \
+  --project=$PROJECT_ID \
+  --service-account="$SERVICE_ACCOUNT" \
+  --set-env-vars="GCP_PROJECT=$PROJECT_ID,GCS_BUCKET_NAME=lexiguard-documents,GOOGLE_API_KEY=$GEMINI_API_KEY" \
+  --memory=2Gi \
+  --cpu=2 \
+  --timeout=300 \
+  --max-instances=10 \
+  --min-instances=0 \
+  --allow-unauthenticated \
+  --quiet
 
 echo ""
-echo "✅ Cloud Run service deployed successfully!"
+echo "✅ Cloud Run Worker deployed successfully!"
+echo ""
 
 # Get the service URL
 SERVICE_URL=$(gcloud run services describe $SERVICE_NAME \
-    --region=$REGION \
-    --project=$PROJECT_ID \
-    --format="value(status.url)")
+  --region=$REGION \
+  --project=$PROJECT_ID \
+  --format='value(status.url)')
 
-echo ""
-echo "📋 Service Details:"
-echo "  Service Name: $SERVICE_NAME"
-echo "  Service URL: $SERVICE_URL"
-echo "  Region: $REGION"
-echo "  Service Account: $SERVICE_ACCOUNT"
-echo "  Memory: 2Gi"
-echo "  CPU: 2"
-echo "  Timeout: 600s"
+echo "🌐 Worker URL: $SERVICE_URL"
 echo ""
 
-# Configure Pub/Sub to push to Cloud Run
-echo "🔗 Step 2: Configuring Pub/Sub push subscription..."
-echo ""
+# Test health endpoint
+echo "🏥 Testing health endpoint..."
+HEALTH_STATUS=$(curl -s -o /dev/null -w "%{http_code}" "$SERVICE_URL/health")
 
-# Check if subscription already exists
-if gcloud pubsub subscriptions describe $PUBSUB_SUBSCRIPTION --project=$PROJECT_ID 2>/dev/null; then
-    echo "⚠️  Subscription already exists. Deleting and recreating..."
-    gcloud pubsub subscriptions delete $PUBSUB_SUBSCRIPTION \
-        --project=$PROJECT_ID \
-        --quiet
+if [ "$HEALTH_STATUS" = "200" ]; then
+    echo "✅ Worker is healthy!"
+else
+    echo "⚠️  Health check returned: $HEALTH_STATUS"
 fi
+echo ""
 
-# Create new push subscription
-echo "Creating push subscription: $PUBSUB_SUBSCRIPTION"
-gcloud pubsub subscriptions create $PUBSUB_SUBSCRIPTION \
-    --topic=$PUBSUB_TOPIC \
-    --push-endpoint=$SERVICE_URL \
-    --push-auth-service-account=$SERVICE_ACCOUNT \
-    --ack-deadline=600 \
-    --message-retention-duration=7d \
-    --project=$PROJECT_ID
-
+echo "⚠️ NEXT STEP: Create Pub/Sub subscription"
 echo ""
-echo "✅ Pub/Sub push subscription configured!"
-
+echo "Run this command to create the subscription:"
 echo ""
-echo "=========================================="
-echo "✅ Deployment Complete!"
-echo "=========================================="
+echo "gcloud pubsub subscriptions create lexiguard-analysis-jobs-sub \\"
+echo "  --topic=lexiguard-analysis-jobs \\"
+echo "  --push-endpoint=\"$SERVICE_URL\" \\"
+echo "  --push-auth-service-account=\"$SERVICE_ACCOUNT\" \\"
+echo "  --ack-deadline=600 \\"
+echo "  --message-retention-duration=7d"
 echo ""
-echo "📊 Summary:"
-echo "  ✓ Cloud Run service deployed"
-echo "  ✓ Environment variables configured"
-echo "  ✓ Pub/Sub subscription created"
-echo "  ✓ Service account linked"
+echo "Or run: bash ../infrastructure/setup-pubsub.sh"
 echo ""
-echo "🧪 Testing the deployment:"
+echo "🔍 Useful commands:"
 echo ""
-echo "1. View logs:"
-echo "   gcloud run logs read $SERVICE_NAME --region=$REGION --limit=50"
+echo "View logs:"
+echo "  gcloud run logs read $SERVICE_NAME --region=$REGION --limit=50"
 echo ""
-echo "2. Monitor Pub/Sub subscription:"
-echo "   gcloud pubsub subscriptions describe $PUBSUB_SUBSCRIPTION"
+echo "View service details:"
+echo "  gcloud run services describe $SERVICE_NAME --region=$REGION"
 echo ""
-echo "3. Test end-to-end:"
-echo "   - Upload a document through your frontend"
-echo "   - Check job status in Firestore"
-echo "   - Monitor worker logs for processing"
-echo ""
-echo "📝 Important Notes:"
-echo "  • Service is NOT publicly accessible (--no-allow-unauthenticated)"
-echo "  • Only Pub/Sub can trigger the service via service account"
-echo "  • Logs are available in Cloud Logging"
-echo "  • Auto-scaling: 0 to 10 instances based on load"
-echo ""
-echo "🎉 Happy Processing!"
+echo "Update environment variables:"
+echo "  gcloud run services update $SERVICE_NAME --region=$REGION --update-env-vars=KEY=VALUE"
 echo ""
