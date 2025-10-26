@@ -8,8 +8,6 @@ import BackToTop from "../components/BackToTop";
 import { getAnalysisById } from "../services/firestoreService";
 import LanguageSelector from "../components/LanguageSelector";
 import { getTranslation, requestTranslation } from "../services/firestoreService";
-import JobStatusTracker from "../components/JobStatusTracker";
-import { subscribeToJobStatus } from "../services/firestoreService";
 // REMOVE THIS LINE: import MarkdownRenderer from "../components/MarkdownRenderer";
 import {
   AlertTriangle,
@@ -124,7 +122,7 @@ function highlightText(text) {
 
     if (ACTIONABLE_REGEX.test(part)) {
       return (
-        <span key={idx} className="bg-red-100 text-red-800 font-bold px-2 py-1 rounded shadow-sm border border-red-300">
+        <span key={idx} className="bg-red-500/50 text-white font-bold px-1 rounded">
           {part}
         </span>
       );
@@ -133,7 +131,7 @@ function highlightText(text) {
       return subParts.map((subPart, subIdx) => {
         if (!subPart) return null;
         return KEYWORDS_REGEX.test(subPart) ? (
-          <span key={`${idx}-${subIdx}`} className="bg-cyan-100 text-cyan-800 font-semibold px-2 py-1 rounded shadow-sm border border-cyan-300">
+          <span key={`${idx}-${subIdx}`} className="bg-cyan-400/20 text-cyan-200 px-1 rounded">
             {subPart}
           </span>
         ) : (
@@ -180,12 +178,6 @@ const [analysis, setAnalysis] = useState(() => {
   const [translatedContent, setTranslatedContent] = useState(null);
   const [translationLoading, setTranslationLoading] = useState(false);
 
-  // NEW: Async job tracking states
-const [isAsyncJob, setIsAsyncJob] = useState(location.state?.isAsyncJob || false);
-const [jobId, setJobId] = useState(location.state?.jobId || null);
-const [jobStatus, setJobStatus] = useState(location.state?.jobStatus || 'pending');
-const [jobData, setJobData] = useState(null);
-
   useEffect(() => {
     if (analysisId && currentUser && !analysis) {
       loadAnalysisFromFirestore();
@@ -214,54 +206,6 @@ useEffect(() => {
   }
 }, [analysis, selectedLanguage, translatedContent, translationLoading, analysisType]);
 
-// NEW: Handle async job tracking
-useEffect(() => {
-  // Check if this is an async job from URL params
-  const pathParts = window.location.pathname.split('/');
-  const isJobPath = pathParts.includes('job');
-  
-  if (isJobPath && pathParts.length >= 4) {
-    const extractedJobId = pathParts[pathParts.length - 1];
-    setIsAsyncJob(true);
-    setJobId(extractedJobId);
-    setJobStatus('pending');
-  }
-}, []);
-
-// NEW: Subscribe to job status updates
-useEffect(() => {
-  if (!isAsyncJob || !jobId || !currentUser) {
-    return;
-  }
-
-  console.log('🔄 Setting up real-time job listener for:', jobId);
-
-  // Subscribe to job status changes in Firestore
-  const unsubscribe = subscribeToJobStatus(jobId, (data) => {
-    if (!data) {
-      console.error('❌ Job not found:', jobId);
-      setJobStatus('failed');
-      return;
-    }
-
-    console.log('📊 Job status update:', data.status);
-    setJobData(data);
-    setJobStatus(data.status);
-
-    // When job completes, load the analysis results
-    if (data.status === 'completed' && data.resultAnalysisId) {
-      console.log('✅ Job completed! Loading analysis:', data.resultAnalysisId);
-      loadCompletedAnalysis(data.resultAnalysisId);
-    }
-  });
-
-  // Cleanup subscription on unmount
-  return () => {
-    console.log('🧹 Cleaning up job listener');
-    unsubscribe();
-  };
-}, [isAsyncJob, jobId, currentUser]);
-
 const loadAnalysisFromFirestore = async () => {
   try {
     setLoading(true);
@@ -274,6 +218,29 @@ const loadAnalysisFromFirestore = async () => {
     const analysisData = await getAnalysisById(analysisId, currentUser.uid);
     
     console.log("📦 Loaded analysis from Firestore:", analysisData);
+    console.log("🔍 Detailed Analysis Data Structure:");
+    console.log("  - summary:", analysisData?.summary ? "EXISTS" : "MISSING");
+    console.log("  - risks:", analysisData?.risks ? `EXISTS (${analysisData.risks.length} items)` : "MISSING");
+    console.log("  - clauses:", analysisData?.clauses ? `EXISTS (${analysisData.clauses.length} items)` : "MISSING");
+    console.log("  - suggestions:", analysisData?.suggestions ? `EXISTS (${analysisData.suggestions.length} items)` : "MISSING");
+    console.log("  - suggested_actions:", analysisData?.suggested_actions ? `EXISTS (${analysisData.suggested_actions.length} items)` : "MISSING");
+    console.log("  - recommendations:", analysisData?.recommendations ? `EXISTS (${analysisData.recommendations.length} items)` : "MISSING");
+    
+    // DETAILED DEBUG: Show first few items of each array
+    console.log("🔍 RISKS ARRAY CONTENT:");
+    if (analysisData?.risks && analysisData.risks.length > 0) {
+      console.log("  First risk:", analysisData.risks[0]);
+      console.log("  All risks:", analysisData.risks);
+    } else {
+      console.log("  No risks found or empty array");
+    }
+    
+    console.log("🔍 SUGGESTIONS ARRAY CONTENT:");
+    if (analysisData?.suggestions && analysisData.suggestions.length > 0) {
+      console.log("  First suggestion:", analysisData.suggestions[0]);
+    } else {
+      console.log("  No suggestions found or empty array");
+    }
     
     const transformedAnalysis = {
       filename: analysisData.originalFilename,
@@ -285,7 +252,7 @@ const loadAnalysisFromFirestore = async () => {
       pii_redacted: analysisData.piiRedacted,
       redacted_text: analysisData.redactedDocumentText,
       redacted_document_text: analysisData.redactedDocumentText,
-      suggestions: analysisData.suggestions || [],
+      suggestions: analysisData.suggestions || analysisData.suggested_actions || analysisData.recommendations || [],
       fairness_analysis: analysisData.fairness_analysis || [],
       privacy_notice: analysisData.piiRedacted ? "✓ Your Personal Data Has Been Redacted for Privacy." : null,
     };
@@ -303,44 +270,6 @@ const loadAnalysisFromFirestore = async () => {
     setLoading(false);
     alert("Failed to load analysis. Redirecting to dashboard...");
     navigate("/dashboard");
-  }
-};
-
-// NEW: Load completed async analysis
-const loadCompletedAnalysis = async (analysisId) => {
-  try {
-    setLoading(true);
-    console.log('📥 Loading completed analysis:', analysisId);
-    
-    const analysisData = await getAnalysisById(analysisId, currentUser.uid);
-    
-    const transformedAnalysis = {
-      filename: analysisData.originalFilename,
-      file_type: analysisData.fileType,
-      summary: analysisData.summary,
-      risks: analysisData.risks || [],
-      clauses: analysisData.clauses || [],
-      total_risky_clauses: analysisData.total_risky_clauses,
-      pii_redacted: analysisData.piiRedacted,
-      redacted_text: analysisData.redactedDocumentText,
-      redacted_document_text: analysisData.redactedDocumentText,
-      suggestions: analysisData.suggestions || [],
-      fairness_analysis: analysisData.fairness_analysis || [],
-      privacy_notice: analysisData.piiRedacted 
-        ? "✓ Your Personal Data Has Been Redacted for Privacy." 
-        : null,
-    };
-    
-    setAnalysis(transformedAnalysis);
-    setAnalysisType(analysisData.analysisType);
-    setIsAsyncJob(false); // Switch to normal results view
-    setLoading(false);
-    
-    console.log('✅ Analysis loaded successfully');
-  } catch (error) {
-    console.error('❌ Error loading completed analysis:', error);
-    setLoading(false);
-    alert('Failed to load analysis results. Please try again.');
   }
 };
 
@@ -454,34 +383,34 @@ const handleLanguageChange = async (languageCode) => {
 // Get displayed content based on selected language
   // Get displayed content based on selected language
   const getDisplayedContent = () => {
-  // If loading translation, show loading state
-  if (translationLoading) {
-    return {
-      summary: "",
-      risks: [],
-      clauses: [],
-      suggestions: []
-    };
-  }
+    // If loading translation, show loading state
+    if (translationLoading) {
+      return {
+        summary: "",
+        risks: [],
+        clauses: [],
+        suggestions: []
+      };
+    }
 
-  // If English is selected OR no translation exists, show original content
-  if (selectedLanguage === 'en' || !translatedContent) {
-    return {
-      summary: analysis?.summary || "",
-      risks: analysis?.risks || [],
-      clauses: analysis?.clauses || [],
-      suggestions: analysis?.suggestions || []
-    };
-  }
+    // If English is selected OR no translation exists, show original content
+    if (selectedLanguage === 'en' || !translatedContent) {
+      return {
+        summary: analysis?.summary || "",
+        risks: analysis?.risks || [],
+        clauses: analysis?.clauses || [],
+        suggestions: analysis?.suggestions || analysis?.suggested_actions || analysis?.recommendations || []
+      };
+    }
 
-  // Show translated content if available
-  return {
-    summary: translatedContent.summary || analysis?.summary || "",
-    risks: translatedContent.risks || analysis?.risks || [],
-    clauses: translatedContent.clauses || analysis?.clauses || [],
-    suggestions: translatedContent.suggestions || analysis?.suggestions || []
+    // Show translated content if available
+    return {
+      summary: translatedContent.summary || analysis?.summary || "",
+      risks: translatedContent.risks || analysis?.risks || [],
+      clauses: translatedContent.clauses || analysis?.clauses || [],
+      suggestions: translatedContent.suggestions || analysis?.suggestions || analysis?.suggested_actions || analysis?.recommendations || []
+    };
   };
-};
 
   const toggleClause = (index) => {
     setExpandedClauses(prev => ({
@@ -693,9 +622,9 @@ const handleLanguageChange = async (languageCode) => {
 
   const getRiskBadge = (level) => {
     const styles = {
-      High: "bg-red-100 text-red-800 border-red-400",
-      Medium: "bg-yellow-100 text-yellow-800 border-yellow-400",
-      Low: "bg-blue-100 text-blue-800 border-blue-400",
+      High: "bg-red-500/20 text-red-400 border-red-500/50",
+      Medium: "bg-yellow-500/20 text-yellow-400 border-yellow-500/50",
+      Low: "bg-blue-500/20 text-blue-400 border-blue-500/50",
     };
     return styles[level] || styles.Medium;
   };
@@ -722,155 +651,6 @@ const handleLanguageChange = async (languageCode) => {
     );
   }
 
-  // NEW: Show async job status tracker
-if (isAsyncJob && jobStatus !== 'completed') {
-  return (
-    <div className="min-h-screen relative bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] overflow-hidden py-16">
-      <div className="absolute inset-0 aurora-bg opacity-20" />
-
-      <div className="relative max-w-4xl mx-auto px-4 sm:px-6 lg:px-8">
-        {/* Header */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          className="mb-8 text-center"
-        >
-          <h1 className="text-4xl font-bold text-white mb-2">
-            Processing Your Document
-          </h1>
-          <p className="text-gray-300">
-            Your analysis is being processed in the background
-          </p>
-        </motion.div>
-
-        {/* Job Status Tracker */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.2 }}
-        >
-          <JobStatusTracker
-            status={jobStatus}
-            documentTitle={jobData?.documentTitle || location.state?.documentTitle || 'Your Document'}
-            estimatedTime="30-60 seconds"
-            errorMessage={jobData?.errorMessage}
-            onComplete={() => {
-              // This will be handled by the useEffect watching jobStatus
-              console.log('Job completed - results will load automatically');
-            }}
-          />
-        </motion.div>
-
-        {/* What's Happening Card */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.4 }}
-          className="mt-8"
-        >
-          <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
-            <CardHeader className="border-b border-gray-700/50">
-              <CardTitle className="text-white text-lg flex items-center gap-2">
-                <FileText className="w-5 h-5 text-cyan-400" />
-                What's Happening Behind the Scenes
-              </CardTitle>
-            </CardHeader>
-            <CardContent className="p-6">
-              <div className="space-y-4">
-                <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-full bg-cyan-500/20 flex items-center justify-center flex-shrink-0">
-                    <span className="text-cyan-400 font-bold">1</span>
-                  </div>
-                  <div>
-                    <h3 className="text-white font-semibold mb-1">Secure Upload</h3>
-                    <p className="text-gray-300 text-sm">
-                      Your document is securely stored in Google Cloud Storage
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-full bg-purple-500/20 flex items-center justify-center flex-shrink-0">
-                    <span className="text-purple-400 font-bold">2</span>
-                  </div>
-                  <div>
-                    <h3 className="text-white font-semibold mb-1">PII Redaction</h3>
-                    <p className="text-gray-300 text-sm">
-                      Google DLP API removes personal information for privacy
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-full bg-emerald-500/20 flex items-center justify-center flex-shrink-0">
-                    <span className="text-emerald-400 font-bold">3</span>
-                  </div>
-                  <div>
-                    <h3 className="text-white font-semibold mb-1">AI Analysis</h3>
-                    <p className="text-gray-300 text-sm">
-                      Gemini AI analyzes clauses and identifies potential risks
-                    </p>
-                  </div>
-                </div>
-
-                <div className="flex items-start gap-3">
-                  <div className="w-8 h-8 rounded-full bg-yellow-500/20 flex items-center justify-center flex-shrink-0">
-                    <span className="text-yellow-400 font-bold">4</span>
-                  </div>
-                  <div>
-                    <h3 className="text-white font-semibold mb-1">Results Ready</h3>
-                    <p className="text-gray-300 text-sm">
-                      Analysis results are saved and will appear automatically
-                    </p>
-                  </div>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-        </motion.div>
-
-        {/* Action Buttons */}
-        <motion.div
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ delay: 0.6 }}
-          className="mt-8 flex gap-4 justify-center"
-        >
-          <Button
-            onClick={() => navigate('/dashboard')}
-            variant="outline"
-            className="border-cyan-400/50 text-cyan-400 hover:bg-cyan-400/10"
-          >
-            Go to Dashboard
-          </Button>
-          <Button
-            onClick={() => navigate('/upload')}
-            className="bg-cyan-600 hover:bg-cyan-500"
-          >
-            Upload Another Document
-          </Button>
-        </motion.div>
-
-        {/* Info Box */}
-        <motion.div
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ delay: 0.8 }}
-          className="mt-8 text-center"
-        >
-          <div className="inline-flex items-center gap-2 bg-blue-900/30 border border-blue-500/30 rounded-lg px-4 py-2">
-            <Shield className="w-4 h-4 text-blue-400" />
-            <p className="text-blue-200 text-sm">
-              You can safely close this page. Results will be saved to your dashboard.
-            </p>
-          </div>
-        </motion.div>
-      </div>
-    </div>
-  );
-}
-
-
   if (!analysis) {
     return (
       <div className="min-h-screen bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] flex items-center justify-center">
@@ -893,13 +673,13 @@ if (isAsyncJob && jobStatus !== 'completed') {
   const isDetailedAnalysis = analysisType === "detailed" || (analysis.clauses && Array.isArray(analysis.clauses) && analysis.clauses.length > 0);
   const displayedContent = getDisplayedContent();
   
-  console.log("🔍 Analysis Type Check:", {
+  // DEBUG: Log analysis type determination
+  console.log("🔍 Analysis Type Determination:", {
     analysisType,
-    hasClauses: !!analysis.clauses,
-    clausesLength: analysis.clauses?.length,
-    hasRisks: !!analysis.risks,
-    risksLength: analysis.risks?.length,
-    isDetailedAnalysis
+    hasClausesArray: analysis.clauses && Array.isArray(analysis.clauses),
+    clausesLength: analysis.clauses?.length || 0,
+    isDetailedAnalysis,
+    risksLength: analysis.risks?.length || 0
   });
   
   // Render Detailed Clause Analysis View
@@ -991,25 +771,25 @@ if (isAsyncJob && jobStatus !== 'completed') {
                         <h2 className="text-2xl font-bold text-white mb-2">
                           Risk Assessment Complete
                         </h2>
-                        <p className="text-gray-100 mb-4 text-base font-medium">
+                        <p className="text-gray-200 mb-4">
                           We've identified {totalClauses} potentially problematic clause{totalClauses !== 1 ? "s" : ""} that require your attention. Review each one carefully and consider the recommendations provided.
                         </p>
                         <div className="flex gap-4 text-sm flex-wrap">
                           <div className="flex items-center gap-2">
                             <div className="w-3 h-3 rounded-full bg-red-500"></div>
-                            <span className="text-gray-100 font-medium">
+                            <span className="text-gray-300">
                               {clauses.filter((c) => c.risk_level === "High").length} High Risk
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <div className="w-3 h-3 rounded-full bg-yellow-500"></div>
-                            <span className="text-gray-100 font-medium">
+                            <span className="text-gray-300">
                               {clauses.filter((c) => c.risk_level === "Medium").length} Medium Risk
                             </span>
                           </div>
                           <div className="flex items-center gap-2">
                             <div className="w-3 h-3 rounded-full bg-blue-500"></div>
-                            <span className="text-gray-100 font-medium">
+                            <span className="text-gray-300">
                               {clauses.filter((c) => c.risk_level === "Low").length} Low Risk
                             </span>
                           </div>
@@ -1039,7 +819,7 @@ if (isAsyncJob && jobStatus !== 'completed') {
                             <div className="flex items-start justify-between gap-4">
                               <div className="flex-1">
                                 <div className="flex items-center gap-3 mb-3">
-                                  <span className="text-gray-200 font-mono text-sm font-semibold">
+                                  <span className="text-gray-400 font-mono text-sm font-semibold">
                                     Clause #{index + 1}
                                   </span>
                                   <span
@@ -1050,7 +830,7 @@ if (isAsyncJob && jobStatus !== 'completed') {
                                     {clause.risk_level} Risk
                                   </span>
                                 </div>
-                                <p className="text-gray-200 italic text-sm leading-relaxed bg-black/30 p-4 rounded-lg border border-gray-700/50 font-medium">
+                                <p className="text-gray-300 italic text-sm leading-relaxed bg-black/30 p-4 rounded-lg border border-gray-700/50">
                                   "{clause.clause}"
                                 </p>
                               </div>
@@ -1078,10 +858,10 @@ if (isAsyncJob && jobStatus !== 'completed') {
                                   <div className="flex items-start gap-3">
                                     <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0 mt-0.5" />
                                     <div>
-                                      <h4 className="text-gray-100 font-semibold mb-1">
+                                      <h4 className="text-white font-semibold mb-1">
                                         Potential Impact
                                       </h4>
-                                      <p className="text-gray-200 text-sm leading-relaxed font-medium">
+                                      <p className="text-gray-200 text-sm leading-relaxed">
                                         {clause.impact}
                                       </p>
                                     </div>
@@ -1092,10 +872,10 @@ if (isAsyncJob && jobStatus !== 'completed') {
                                   <div className="flex items-start gap-3">
                                     <FileText className="w-5 h-5 text-blue-400 flex-shrink-0 mt-0.5" />
                                     <div>
-                                      <h4 className="text-gray-100 font-semibold mb-1">
+                                      <h4 className="text-white font-semibold mb-1">
                                         Why This Matters
                                       </h4>
-                                      <p className="text-gray-200 text-sm leading-relaxed font-medium">
+                                      <p className="text-gray-200 text-sm leading-relaxed">
                                         {clause.explanation}
                                       </p>
                                     </div>
@@ -1106,10 +886,10 @@ if (isAsyncJob && jobStatus !== 'completed') {
                                   <div className="flex items-start gap-3">
                                     <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
                                     <div className="flex-1">
-                                      <h4 className="text-gray-100 font-semibold mb-1">
+                                      <h4 className="text-white font-semibold mb-1">
                                         What You Should Do
                                       </h4>
-                                      <p className="text-gray-200 text-sm leading-relaxed font-medium">
+                                      <p className="text-gray-200 text-sm leading-relaxed">
                                         {clause.recommendation}
                                       </p>
                                     </div>
@@ -1167,19 +947,19 @@ if (isAsyncJob && jobStatus !== 'completed') {
                   </CardHeader>
                   <CardContent className="p-4 space-y-4">
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-200 font-medium">Processing</span>
+                      <span className="text-sm text-gray-200">Processing</span>
                       <Badge variant="secondary">Ready</Badge>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-200 font-medium">Document Type</span>
+                      <span className="text-sm text-gray-200">Document Type</span>
                       <Badge variant="outline">{fileType}</Badge>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-200 font-medium">Analysis Type</span>
+                      <span className="text-sm text-gray-200">Analysis Type</span>
                       <Badge variant="outline">Detailed</Badge>
                     </div>
                     <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-200 font-medium">Risk Level</span>
+                      <span className="text-sm text-gray-200">Risk Level</span>
                       <Badge
                         variant={
                           clauses.some((c) => c.risk_level === "High")
@@ -1208,23 +988,23 @@ if (isAsyncJob && jobStatus !== 'completed') {
                   </CardHeader>
                   <CardContent className="p-4 space-y-3">
                     <div className="flex justify-between items-center">
-                      <span className="text-gray-200 text-sm font-medium">Total Clauses:</span>
-                      <span className="text-gray-100 font-bold">{clauses.length}</span>
+                      <span className="text-gray-300 text-sm">Total Clauses:</span>
+                      <span className="text-white font-bold">{clauses.length}</span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-gray-200 text-sm font-medium">High Risk:</span>
+                      <span className="text-gray-300 text-sm">High Risk:</span>
                       <span className="text-red-400 font-bold">
                         {clauses.filter((c) => c.risk_level === "High").length}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-gray-200 text-sm font-medium">Medium Risk:</span>
+                      <span className="text-gray-300 text-sm">Medium Risk:</span>
                       <span className="text-yellow-400 font-bold">
                         {clauses.filter((c) => c.risk_level === "Medium").length}
                       </span>
                     </div>
                     <div className="flex justify-between items-center">
-                      <span className="text-gray-200 text-sm font-medium">Low Risk:</span>
+                      <span className="text-gray-300 text-sm">Low Risk:</span>
                       <span className="text-blue-400 font-bold">
                         {clauses.filter((c) => c.risk_level === "Low").length}
                       </span>
@@ -1248,7 +1028,7 @@ if (isAsyncJob && jobStatus !== 'completed') {
                         clauses.slice(0, 3).map((clause, idx) => (
                           <div key={idx} className="flex items-start space-x-2">
                             <CheckCircle className="flex-shrink-0 w-4 h-4 text-emerald-400 mt-0.5" />
-                            <span className="text-sm text-gray-200 leading-snug font-medium">
+                            <span className="text-sm text-gray-200 leading-snug">
                               {clause.explanation || "Review clause carefully"}
                             </span>
                           </div>
@@ -1256,7 +1036,7 @@ if (isAsyncJob && jobStatus !== 'completed') {
                       ) : (
                         <div className="flex items-start space-x-2">
                           <CheckCircle className="w-4 h-4 text-emerald-400 mt-0.5" />
-                          <span className="text-sm text-gray-200 font-medium">
+                          <span className="text-sm text-gray-200">
                             No specific responsibilities identified
                           </span>
                         </div>
@@ -1279,7 +1059,7 @@ if (isAsyncJob && jobStatus !== 'completed') {
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="p-4">
-                    <p className="text-gray-200 text-sm mb-4 font-medium">
+                    <p className="text-gray-200 text-sm mb-4">
                       Generate a comprehensive email covering all risks and findings in this document.
                     </p>
                     <Button
@@ -1564,6 +1344,22 @@ const suggestions = displayedContent.suggestions;
 const fairnessAnalysis = analysis.fairness_analysis || [];
 const fileType = analysis.file_type || "Text";
 
+// Debug logging
+console.log("🔍 Standard Analysis Debug:", {
+  summary: summary?.substring(0, 50) + "...",
+  risksCount: risks?.length,
+  suggestionsCount: suggestions?.length,
+  analysis: analysis,
+  displayedContent: displayedContent,
+  rawRisks: analysis?.risks,
+  rawSuggestions: analysis?.suggestions,
+  rawRecommendations: analysis?.recommendations
+});
+
+// Additional debugging for the actual data content
+console.log("🔍 Risks array contents:", risks);
+console.log("🔍 Summary content:", summary);
+
 return (
   <div className="min-h-screen relative bg-gradient-to-b from-black via-[#0F2A40] to-[#064E3B] overflow-hidden py-16">
     <div className="absolute inset-0 aurora-bg opacity-20" />
@@ -1637,15 +1433,15 @@ return (
   animate={{ opacity: 1, y: 0 }}
   transition={{ delay: 0.1 }}
 >
-  <Card className="border-none bg-white/95 backdrop-blur-md shadow-2xl border border-gray-200/50">
-    <CardHeader className="border-b border-gray-200">
-      <CardTitle className="flex items-center gap-2 text-gray-900">
-        <FileText className="w-5 h-5 text-cyan-600" />
+  <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+    <CardHeader className="border-b border-gray-700/50">
+      <CardTitle className="flex items-center gap-2 text-white">
+        <FileText className="w-5 h-5 text-cyan-400" />
         Document Summary
       </CardTitle>
     </CardHeader>
     <CardContent className="p-6">
-      <div className="prose max-w-none space-y-4">
+      <div className="prose prose-invert max-w-none space-y-4">
         {summary.split('\n').map((line, index) => {
           const trimmed = line.trim();
           if (!trimmed) return null;
@@ -1653,7 +1449,7 @@ return (
           // Handle ## headings (main sections)
           if (trimmed.startsWith('## ')) {
             return (
-              <h2 key={index} className="text-2xl font-bold text-slate-800 mt-6 mb-3 pb-2 border-b border-cyan-200">
+              <h2 key={index} className="text-lg font-bold text-cyan-400 mt-6 mb-3 pb-2 border-b border-cyan-400/30">
                 {trimmed.replace('## ', '')}
               </h2>
             );
@@ -1662,7 +1458,7 @@ return (
           // Handle **Bold:** sub-headings
           if (trimmed.match(/^\*\*.*\*\*:$/)) {
             return (
-              <h3 key={index} className="text-xl font-bold text-slate-700 mt-4 mb-2">
+              <h3 key={index} className="text-base font-semibold text-cyan-300 mt-4 mb-2">
                 {trimmed.replace(/\*\*/g, '')}
               </h3>
             );
@@ -1679,7 +1475,7 @@ return (
                 if (part.startsWith('**') && part.endsWith('**')) {
                   const boldText = part.slice(2, -2);
                   return (
-                    <strong key={idx} className="text-slate-900 font-extrabold">
+                    <strong key={idx} className="text-white font-semibold">
                       {highlightText(boldText)}
                     </strong>
                   );
@@ -1689,9 +1485,9 @@ return (
             };
             
             return (
-              <div key={index} className="flex items-start gap-3 ml-4 my-3">
-                <span className="text-cyan-600 mt-1.5 flex-shrink-0 text-lg font-bold">•</span>
-                <span className="text-slate-700 leading-relaxed flex-1 text-base font-medium">
+              <div key={index} className="flex items-start gap-2 ml-4 my-2">
+                <span className="text-cyan-400 mt-1.5 flex-shrink-0">•</span>
+                <span className="text-gray-200 leading-relaxed flex-1">
                   {renderWithBold(content)}
                 </span>
               </div>
@@ -1705,7 +1501,7 @@ return (
               if (part.startsWith('**') && part.endsWith('**')) {
                 const boldText = part.slice(2, -2);
                 return (
-                  <strong key={idx} className="text-slate-900 font-extrabold">
+                  <strong key={idx} className="text-white font-semibold">
                     {highlightText(boldText)}
                   </strong>
                 );
@@ -1715,7 +1511,7 @@ return (
           };
           
           return (
-            <p key={index} className="text-slate-700 leading-relaxed text-base font-medium">
+            <p key={index} className="text-gray-200 leading-relaxed">
               {renderWithBold(trimmed)}
             </p>
           );
@@ -1726,46 +1522,47 @@ return (
 </motion.div>
 
           {/* Risks Card */}
+                    {/* Risks Card */}
           <motion.div
             initial={{ opacity: 0, y: 20 }}
             animate={{ opacity: 1, y: 0 }}
             transition={{ delay: 0.2 }}
           >
-            <Card className="border-none bg-white/95 backdrop-blur-md shadow-2xl border border-gray-200/50">
-              <CardHeader className="border-b border-gray-200">
-                <CardTitle className="flex items-center gap-2 text-gray-900">
-                  <AlertTriangle className="w-5 h-5 text-red-600" />
+            <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+              <CardHeader className="border-b border-gray-700/50">
+                <CardTitle className="flex items-center gap-2 text-white">
+                  <AlertTriangle className="w-5 h-5 text-red-400" />
                   Identified Risks ({risks.length})
                 </CardTitle>
               </CardHeader>
               <CardContent className="p-6">
                 {risks.length === 0 ? (
-                  <div className="flex items-center gap-3 text-emerald-700 bg-emerald-50 p-4 rounded-lg border border-emerald-200">
+                  <div className="flex items-center gap-3 text-emerald-400 bg-emerald-900/20 p-4 rounded-lg border border-emerald-500/30">
                     <CheckCircle className="w-5 h-5" />
-                    <span className="font-semibold">No significant risks detected in this document.</span>
+                    <span>No significant risks detected in this document.</span>
                   </div>
                 ) : (
                   <div className="space-y-4">
                     {risks.map((risk, index) => (
                       <div
                         key={index}
-                        className="bg-gray-50/80 border border-gray-300 rounded-lg p-5 hover:border-cyan-500 hover:shadow-md transition-all"
+                        className="bg-gray-800/50 border border-gray-700 rounded-lg p-4 hover:border-cyan-400/50 transition-all"
                       >
                         <div className="flex items-start justify-between gap-4 mb-3">
                           <div className="flex-1">
-                            <div className="flex items-center gap-2 mb-3">
+                            <div className="flex items-center gap-2 mb-2">
                               <span
-                                className={`px-3 py-1 rounded-full text-sm font-bold border ${getRiskBadge(
+                                className={`px-3 py-1 rounded-full text-xs font-semibold border ${getRiskBadge(
                                   risk.severity
                                 )}`}
                               >
                                 {risk.severity} Risk
                               </span>
                             </div>
-                            <p className="text-slate-800 text-base italic mb-3 bg-gray-100 p-4 rounded border border-gray-300 font-semibold leading-relaxed">
+                            <p className="text-gray-300 text-sm italic mb-2 bg-black/30 p-3 rounded border border-gray-700/50">
                               "{risk.clause_text}"
                             </p>
-                            <p className="text-slate-700 text-base leading-relaxed font-medium">
+                            <p className="text-gray-200 text-sm">
                               {risk.risk_explanation}
                             </p>
                           </div>
@@ -1774,7 +1571,7 @@ return (
                         <Button
                           onClick={() => handleGenerateNegotiation(risk.clause_text)}
                           size="sm"
-                          className="bg-cyan-600 hover:bg-cyan-700 text-white mt-2 font-semibold"
+                          className="bg-cyan-600 hover:bg-cyan-500 text-white mt-2"
                         >
                           <Mail className="w-4 h-4 mr-2" />
                           Draft Negotiation Email
@@ -1794,10 +1591,10 @@ return (
               animate={{ opacity: 1, y: 0 }}
               transition={{ delay: 0.25 }}
             >
-              <Card className="border-none bg-white/95 backdrop-blur-md shadow-2xl border border-gray-200/50">
-                <CardHeader className="border-b border-gray-200">
-                  <CardTitle className="flex items-center gap-2 text-gray-900">
-                    <TrendingUp className="w-5 h-5 text-emerald-600" />
+              <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+                <CardHeader className="border-b border-gray-700/50">
+                  <CardTitle className="flex items-center gap-2 text-white">
+                    <TrendingUp className="w-5 h-5 text-emerald-400" />
                     Suggested Actions
                   </CardTitle>
                 </CardHeader>
@@ -1806,10 +1603,10 @@ return (
                     {suggestions.map((suggestion, index) => (
                       <div
                         key={index}
-                        className="flex items-start gap-3 bg-emerald-50 border border-emerald-200 p-4 rounded-lg"
+                        className="flex items-start gap-3 bg-emerald-900/20 border border-emerald-500/30 p-4 rounded-lg"
                       >
-                        <CheckCircle className="w-5 h-5 text-emerald-600 flex-shrink-0 mt-0.5" />
-                        <p className="text-slate-700 text-base leading-relaxed font-medium">{highlightText(suggestion)}</p>
+                        <CheckCircle className="w-5 h-5 text-emerald-400 flex-shrink-0 mt-0.5" />
+                        <p className="text-gray-200 text-sm">{highlightText(suggestion)}</p>
                       </div>
                     ))}
                   </div>
@@ -1837,7 +1634,7 @@ return (
                     <div key={index} className="border border-gray-700 rounded-lg p-4 bg-gray-800/30">
                       <div className="mb-4">
                         <div className="flex items-center gap-3 mb-2">
-                          <span className="text-sm font-bold text-gray-200">Fairness Score:</span>
+                          <span className="text-sm font-semibold text-gray-400">Fairness Score:</span>
                           <div className="flex items-center gap-2">
                             <div className="w-32 h-2 bg-gray-700 rounded-full overflow-hidden">
                               <div
@@ -1858,22 +1655,22 @@ return (
 
                       <div className="space-y-3">
                         <div>
-                          <h4 className="text-base font-bold text-red-400 mb-2">Risky Clause:</h4>
-                          <p className="text-gray-100 text-base italic bg-red-900/20 p-3 rounded border border-red-500/30">
+                          <h4 className="text-sm font-semibold text-red-400 mb-1">Risky Clause:</h4>
+                          <p className="text-gray-300 text-sm italic bg-red-900/20 p-2 rounded border border-red-500/30">
                             "{item.risky_clause}"
                           </p>
                         </div>
 
                         <div>
-                          <h4 className="text-base font-bold text-emerald-400 mb-2">Suggested Standard Clause:</h4>
-                          <p className="text-gray-100 text-base bg-emerald-900/20 p-3 rounded border border-emerald-500/30">
+                          <h4 className="text-sm font-semibold text-emerald-400 mb-1">Suggested Standard Clause:</h4>
+                          <p className="text-gray-300 text-sm bg-emerald-900/20 p-2 rounded border border-emerald-500/30">
                             {item.standard_clause}
                           </p>
                         </div>
 
                         <div>
-                          <h4 className="text-base font-bold text-blue-400 mb-2">Explanation:</h4>
-                          <p className="text-gray-50 text-base leading-relaxed">{item.explanation}</p>
+                          <h4 className="text-sm font-semibold text-blue-400 mb-1">Explanation:</h4>
+                          <p className="text-gray-200 text-sm">{item.explanation}</p>
                         </div>
                       </div>
                     </div>
@@ -1890,25 +1687,25 @@ return (
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.3 }}
             >
-              <Card className="border-none bg-white shadow-2xl">
-                <CardHeader className="border-b border-gray-200">
-                  <CardTitle className="text-gray-900 text-lg">Analysis Status</CardTitle>
+              <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+                <CardHeader className="border-b border-gray-700/50">
+                  <CardTitle className="text-white text-lg">Analysis Status</CardTitle>
                 </CardHeader>
                 <CardContent className="p-4 space-y-4">
                   <div className="flex items-center justify-between">
-                    <span className="text-base text-gray-800 font-semibold">Processing</span>
+                    <span className="text-sm text-gray-200">Processing</span>
                     <Badge variant="secondary">Complete</Badge>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-base text-gray-800 font-semibold">Document Type</span>
+                    <span className="text-sm text-gray-200">Document Type</span>
                     <Badge variant="outline">{fileType}</Badge>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-base text-gray-800 font-semibold">Analysis Type</span>
+                    <span className="text-sm text-gray-200">Analysis Type</span>
                     <Badge variant="outline">Standard</Badge>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-base text-gray-800 font-semibold">Risk Level</span>
+                    <span className="text-sm text-gray-200">Risk Level</span>
                     <Badge
                       variant={
                         risks.some((r) => r.severity === "High")
@@ -1928,33 +1725,33 @@ return (
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.4 }}
             >
-              <Card className="border-none bg-white/95 backdrop-blur-md shadow-2xl border border-gray-200/50">
-                <CardHeader className="border-b border-gray-200">
-                  <CardTitle className="flex items-center gap-2 text-gray-900 text-lg">
-                    <Shield className="w-5 h-5 text-purple-600" />
+              <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+                <CardHeader className="border-b border-gray-700/50">
+                  <CardTitle className="flex items-center gap-2 text-white text-lg">
+                    <Shield className="w-5 h-5 text-purple-400" />
                     Quick Stats
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-4 space-y-3">
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-700 text-base font-medium">Total Risks:</span>
-                    <span className="text-slate-800 font-bold text-lg">{risks.length}</span>
+                    <span className="text-gray-300 text-sm">Total Risks:</span>
+                    <span className="text-white font-bold">{risks.length}</span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-700 text-base font-medium">High Risk:</span>
-                    <span className="text-red-700 font-bold text-lg">
+                    <span className="text-gray-300 text-sm">High Risk:</span>
+                    <span className="text-red-400 font-bold">
                       {risks.filter((r) => r.severity === "High").length}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-700 text-base font-medium">Medium Risk:</span>
-                    <span className="text-yellow-700 font-bold text-lg">
+                    <span className="text-gray-300 text-sm">Medium Risk:</span>
+                    <span className="text-yellow-400 font-bold">
                       {risks.filter((r) => r.severity === "Medium").length}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
-                    <span className="text-slate-700 text-base font-medium">Suggestions:</span>
-                    <span className="text-emerald-700 font-bold text-lg">{suggestions.length}</span>
+                    <span className="text-gray-300 text-sm">Suggestions:</span>
+                    <span className="text-emerald-400 font-bold">{suggestions.length}</span>
                   </div>
                 </CardContent>
               </Card>
@@ -1965,25 +1762,25 @@ return (
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.5 }}
             >
-              <Card className="border-none bg-white/95 backdrop-blur-md shadow-2xl border border-gray-200/50">
-                <CardHeader className="border-b border-gray-200">
-                  <CardTitle className="text-gray-900 text-lg">Key Responsibilities</CardTitle>
+              <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl">
+                <CardHeader className="border-b border-gray-700/50">
+                  <CardTitle className="text-white text-lg">Key Responsibilities</CardTitle>
                 </CardHeader>
                 <CardContent className="p-4">
                   <div className="space-y-3">
                     {risks.length > 0 ? (
                       risks.slice(0, 3).map((risk, idx) => (
                         <div key={idx} className="flex items-start space-x-2">
-                          <CheckCircle className="flex-shrink-0 w-5 h-5 text-emerald-600 mt-0.5" />
-                          <span className="text-base text-slate-700 leading-snug font-medium">
+                          <CheckCircle className="flex-shrink-0 w-4 h-4 text-emerald-400 mt-0.5" />
+                          <span className="text-sm text-gray-200 leading-snug">
                             {risk.risk_explanation || "Review this risk carefully"}
                           </span>
                         </div>
                       ))
                     ) : (
                       <div className="flex items-start space-x-2">
-                        <CheckCircle className="w-5 h-5 text-emerald-600 mt-0.5" />
-                        <span className="text-base text-slate-700 font-medium">
+                        <CheckCircle className="w-4 h-4 text-emerald-400 mt-0.5" />
+                        <span className="text-sm text-gray-200">
                           No specific responsibilities identified
                         </span>
                       </div>
@@ -2006,12 +1803,12 @@ return (
                   </CardTitle>
                 </CardHeader>
                 <CardContent className="p-4">
-                  <p className="text-white text-base mb-4 leading-relaxed font-medium">
+                  <p className="text-gray-200 text-sm mb-4">
                     Generate a comprehensive email covering all risks and findings in this document.
                   </p>
                   <Button
                     onClick={handleGenerateDocumentEmail}
-                    className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white font-semibold"
+                    className="w-full bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-500 hover:to-pink-500 text-white"
                   >
                     <Mail className="w-4 h-4 mr-2" />
                     Generate Document Email
