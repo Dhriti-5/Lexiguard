@@ -685,6 +685,108 @@ export const deleteJob = async (jobId, userId) => {
 };
 
 /**
+ * Get or set user role for a specific analysis
+ * @param {string} analysisId - Document ID
+ * @param {string} userId - Firebase Auth user ID
+ * @param {string} userRole - (Optional) Role to set. If not provided, just retrieves existing role
+ * @returns {Promise<string|null>} - Current user role or null
+ */
+export const manageUserRole = async (analysisId, userId, userRole = null) => {
+  try {
+    const docRef = doc(db, COLLECTION_NAME, analysisId);
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) {
+      throw new Error('Analysis not found');
+    }
+    
+    const data = docSnap.data();
+    
+    // Security check
+    if (data.userID !== userId) {
+      throw new Error('Unauthorized access to analysis');
+    }
+    
+    // If setting a new role
+    if (userRole) {
+      await updateDoc(docRef, {
+        userRole: userRole,
+        roleUpdatedAt: serverTimestamp()
+      });
+      console.log(`✅ User role '${userRole}' saved for analysis ${analysisId}`);
+      return userRole;
+    }
+    
+    // Just retrieving existing role
+    return data.userRole || null;
+  } catch (error) {
+    console.error('❌ Error managing user role:', error);
+    throw error;
+  }
+};
+
+/**
+ * Save conversation history for an analysis
+ * @param {string} analysisId - Document ID
+ * @param {string} userId - Firebase Auth user ID
+ * @param {Array} conversationHistory - Array of message objects
+ */
+export const saveConversationHistory = async (analysisId, userId, conversationHistory) => {
+  try {
+    const docRef = doc(db, COLLECTION_NAME, analysisId);
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) {
+      throw new Error('Analysis not found');
+    }
+    
+    // Security check
+    if (docSnap.data().userID !== userId) {
+      throw new Error('Unauthorized access to analysis');
+    }
+    
+    await updateDoc(docRef, {
+      conversationHistory: conversationHistory,
+      lastChatActivity: serverTimestamp()
+    });
+    
+    console.log('✅ Conversation history saved');
+  } catch (error) {
+    console.error('❌ Error saving conversation history:', error);
+    throw error;
+  }
+};
+
+/**
+ * Get conversation history for an analysis
+ * @param {string} analysisId - Document ID
+ * @param {string} userId - Firebase Auth user ID
+ * @returns {Promise<Array>} - Conversation history array
+ */
+export const getConversationHistory = async (analysisId, userId) => {
+  try {
+    const docRef = doc(db, COLLECTION_NAME, analysisId);
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) {
+      throw new Error('Analysis not found');
+    }
+    
+    const data = docSnap.data();
+    
+    // Security check
+    if (data.userID !== userId) {
+      throw new Error('Unauthorized access to analysis');
+    }
+    
+    return data.conversationHistory || [];
+  } catch (error) {
+    console.error('❌ Error retrieving conversation history:', error);
+    return [];
+  }
+};
+
+/**
  * Get job statistics for dashboard
  * 
  * @param {string} userId - Firebase Auth user ID

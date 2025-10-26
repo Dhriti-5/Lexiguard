@@ -6,6 +6,7 @@ import Home from "./pages/Home";
 import Upload from "./pages/Upload";
 import Results from "./pages/Results";
 import JobResults from "./pages/JobResults"; // ✅ ADD THIS IMPORT
+import ChatWithDocument from "./pages/ChatWithDocument"; // ✅ ADD CHAT PAGE IMPORT
 import Dashboard from "./pages/Dashboard";
 import Glossary from "./pages/Glossary";
 import FAQ from "./pages/FAQ";
@@ -61,6 +62,16 @@ function App() {
               element={
                 <ProtectedRoute>
                   <Results />
+                </ProtectedRoute>
+              }
+            />
+            
+            {/* ✅ ADD CHAT WITH DOCUMENT ROUTE */}
+            <Route
+              path="/chat/:analysisId"
+              element={
+                <ProtectedRoute>
+                  <ChatWithDocument />
                 </ProtectedRoute>
               }
             />

@@ -5,6 +5,7 @@ import { Button } from "../components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import BackToTop from "../components/BackToTop";
+import RoleAwareChatAgent from "../components/RoleAwareChatAgent";
 import { getAnalysisById } from "../services/firestoreService";
 import LanguageSelector from "../components/LanguageSelector";
 import { getTranslation, requestTranslation } from "../services/firestoreService";
@@ -148,7 +149,7 @@ export default function Results() {
   const { analysisId } = useParams();
   const { currentUser } = useAuth();
   
-const [analysis, setAnalysis] = useState(() => {
+  const [analysis, setAnalysis] = useState(() => {
   const state = location.state?.analysis;
   if (state) {
     console.log("📦 Initial analysis from location.state:", state);
@@ -158,9 +159,6 @@ const [analysis, setAnalysis] = useState(() => {
   const [analysisType, setAnalysisType] = useState(location.state?.analysisType || null);
   const [loading, setLoading] = useState(false);
 
-   const [chatMessage, setChatMessage] = useState("");
-  const [chatHistory, setChatHistory] = useState([]);
-  const [chatLoading, setChatLoading] = useState(false);
   const [selectedClauseForNegotiation, setSelectedClauseForNegotiation] = useState(null);
   const [negotiationEmail, setNegotiationEmail] = useState("");
   const [negotiationLoading, setNegotiationLoading] = useState(false);
@@ -273,12 +271,6 @@ const loadAnalysisFromFirestore = async () => {
     navigate("/dashboard");
   }
 };
-
-
-useEffect(() => {
-    const chatContainer = document.getElementById("chat-container");
-    if (chatContainer) chatContainer.scrollTop = chatContainer.scrollHeight;
-  }, [chatHistory]);
 
   // Translation handler
   // ============================================
@@ -418,49 +410,6 @@ const handleLanguageChange = async (languageCode) => {
       ...prev,
       [index]: !prev[index]
     }));
-  };
-
-  const handleSendMessage = async () => {
-    if (!chatMessage.trim()) return;
-
-    const userMessage = chatMessage.trim();
-    setChatMessage("");
-    setChatLoading(true);
-
-    setChatHistory((prev) => [...prev, { role: "user", content: userMessage }]);
-
-    try {
-      const documentText = analysis.redacted_text || analysis.redacted_document_text || "";
-      
-      if (!documentText) {
-        throw new Error("Document text not available");
-      }
-
-      const res = await fetch("http://localhost:8000/chat", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: userMessage,
-          document_text: documentText,
-        }),
-      });
-
-      const data = await res.json();
-      setChatHistory((prev) => [
-        ...prev,
-        { role: "assistant", content: data.reply || "No response received." },
-      ]);
-    } catch (error) {
-      console.error(error);
-      setChatHistory((prev) => [
-        ...prev,
-        { role: "assistant", content: error.message === "Document text not available" 
-          ? "❌ Document text not available. Please re-analyze the document." 
-          : "❌ Error communicating with the server." },
-      ]);
-    } finally {
-      setChatLoading(false);
-    }
   };
 
   const handleGenerateNegotiation = async (clauseText) => {
@@ -1108,58 +1057,13 @@ const handleLanguageChange = async (languageCode) => {
                 animate={{ opacity: 1, x: 0 }}
                 transition={{ delay: 0.6 }}
               >
-                <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl flex flex-col h-[500px]">
-                  <CardHeader className="border-b border-gray-700/50">
-                    <CardTitle className="flex items-center gap-2 text-white text-lg">
-                      <MessageSquare className="w-5 h-5 text-cyan-400" />
-                      Chat with Document
-                    </CardTitle>
-                  </CardHeader>
-                  <CardContent className="flex flex-col flex-1 overflow-hidden p-4">
-                    <div
-                      id="chat-container"
-                      className="flex-1 flex flex-col gap-2 overflow-y-auto px-2 py-2"
-                      style={{
-                        scrollbarWidth: "thin",
-                        scrollbarColor: "#0FC6B2 #0F2A40",
-                      }}
-                    >
-                      {chatHistory.map((msg, idx) => (
-                        <div
-                          key={idx}
-                          className={`inline-block max-w-[70%] p-3 rounded-2xl break-words shadow-md transition-shadow duration-200 ${
-                            msg.role === "user"
-                              ? "bg-gradient-to-r from-cyan-600 to-cyan-500 text-white self-end mr-0"
-                              : "bg-gray-800 text-gray-100 self-start ml-0"
-                          }`}
-                        >
-                          {msg.content}
-                        </div>
-                      ))}
-                      {chatLoading && (
-                        <p className="text-gray-300 italic text-sm self-start">AI is typing...</p>
-                      )}
-                    </div>
-
-                    <div className="mt-2 flex space-x-2">
-                      <input
-                        type="text"
-                        value={chatMessage}
-                        onChange={(e) => setChatMessage(e.target.value)}
-                        onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                        placeholder="Type your message..."
-                        className="flex-1 p-3 rounded-2xl bg-[#064E3B]/80 text-white border border-gray-600 focus:outline-none placeholder-gray-400"
-                      />
-                      <Button
-                        onClick={handleSendMessage}
-                        disabled={chatLoading || !chatMessage.trim()}
-                        className="bg-cyan-600 hover:bg-cyan-500 text-white rounded-2xl px-6"
-                      >
-                        Send
-                      </Button>
-                    </div>
-                  </CardContent>
-                </Card>
+                <RoleAwareChatAgent 
+                  analysisId={analysisId}
+                  redactedDocumentText={analysis?.redacted_text || analysis?.redacted_document_text || ''}
+                  height="500px"
+                  showTitle={true}
+                  className=""
+                />
               </motion.div>
               <Button
                 onClick={() => navigate("/upload")}
@@ -1845,90 +1749,19 @@ return (
                 </CardContent>
               </Card>
             </motion.div>
-            <motion.div
-  initial={{ opacity: 0, x: 20 }}
-  animate={{ opacity: 1, x: 0 }}
-  transition={{ delay: 0.58 }}
->
-  <Card className="border-none bg-gradient-to-br from-orange-900/40 to-red-900/40 backdrop-blur-md shadow-2xl">
-    <CardHeader className="border-b border-gray-700/50">
-      <CardTitle className="flex items-center gap-2 text-white text-lg">
-        <Scale className="w-5 h-5 text-orange-400" />
-        Need Legal Advice?
-      </CardTitle>
-    </CardHeader>
-    <CardContent className="p-4">
-      <p className="text-gray-200 text-sm mb-4">
-        Connect with verified lawyers who can help you understand and negotiate this document.
-      </p>
-      <Button
-        onClick={() => navigate("/lawyers")}
-        className="w-full bg-gradient-to-r from-orange-600 to-red-600 hover:from-orange-500 hover:to-red-500 text-white"
-      >
-        <Scale className="w-4 h-4 mr-2" />
-        Ask a Lawyer
-      </Button>
-    </CardContent>
-  </Card>
-</motion.div>
 
             <motion.div
               initial={{ opacity: 0, x: 20 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ delay: 0.6 }}
             >
-              <Card className="border-none bg-[#064E3B]/90 backdrop-blur-md shadow-2xl flex flex-col h-[500px]">
-                <CardHeader className="border-b border-gray-700/50">
-                  <CardTitle className="flex items-center gap-2 text-white text-lg">
-                    <MessageSquare className="w-5 h-5 text-cyan-400" />
-                    Chat with Document
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="flex flex-col flex-1 overflow-hidden p-4">
-                  <div
-                    id="chat-container"
-                    className="flex-1 flex flex-col gap-2 overflow-y-auto px-2 py-2"
-                    style={{
-                      scrollbarWidth: "thin",
-                      scrollbarColor: "#0FC6B2 #0F2A40",
-                    }}
-                  >
-                    {chatHistory.map((msg, idx) => (
-                      <div
-                        key={idx}
-                        className={`inline-block max-w-[70%] p-3 rounded-2xl break-words shadow-md transition-shadow duration-200 ${
-                          msg.role === "user"
-                            ? "bg-gradient-to-r from-cyan-600 to-cyan-500 text-white self-end mr-0"
-                            : "bg-gray-800 text-gray-100 self-start ml-0"
-                        }`}
-                      >
-                        {msg.content}
-                      </div>
-                    ))}
-                    {chatLoading && (
-                      <p className="text-gray-300 italic text-sm self-start">AI is typing...</p>
-                    )}
-                  </div>
-
-                  <div className="mt-2 flex space-x-2">
-                    <input
-                      type="text"
-                      value={chatMessage}
-                      onChange={(e) => setChatMessage(e.target.value)}
-                      onKeyDown={(e) => e.key === "Enter" && handleSendMessage()}
-                      placeholder="Type your message..."
-                      className="flex-1 p-3 rounded-2xl bg-[#064E3B]/80 text-white border border-gray-600 focus:outline-none placeholder-gray-400"
-                    />
-                    <Button
-                      onClick={handleSendMessage}
-                      disabled={chatLoading || !chatMessage.trim()}
-                      className="bg-cyan-600 hover:bg-cyan-500 text-white rounded-2xl px-6"
-                    >
-                      Send
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
+              <RoleAwareChatAgent
+                analysisId={analysisId}
+                redactedDocumentText={analysis?.redacted_text || analysis?.redacted_document_text || ''}
+                height="500px"
+                showTitle={true}
+                className=""
+              />
             </motion.div>
 
             <Button
