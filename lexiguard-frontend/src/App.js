@@ -12,7 +12,7 @@ import FAQ from "./pages/FAQ";
 import About from "./pages/About";
 import Contact from "./pages/Contact";
 import Login from "./pages/Login";
-
+import LawyerDirectory from "./pages/LawyerDirectory";
 function App() {
   return (
     <Router>
@@ -23,6 +23,7 @@ function App() {
             <Route path="/login" element={<Login />} />
             <Route path="/about" element={<About />} />
             <Route path="/glossary" element={<Glossary />} />
+            <Route path="/lawyers" element={<LawyerDirectory />} />
             <Route path="/faq" element={<FAQ />} />
             <Route path="/contact" element={<Contact />} />
             
