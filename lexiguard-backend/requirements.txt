@@ -1,13 +1,4 @@
-fastapi
-uvicorn[standard]
-google-generativeai
-pydantic
-google-cloud-dlp
-google-cloud-translate==3.15.0
-google-cloud-firestore
-python-dotenv
-PyPDF2
-python-multipart
-python-docx
-reportlab
-firebase-admin
+﻿google-cloud-pubsub>=2.18.0
+google-cloud-firestore>=2.13.0
+functions-framework>=3.5.0
+cloudevents>=1.9.0

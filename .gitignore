@@ -1,2 +1,3 @@
 janhaq-backend/node_modules/
 .vercel
+infrastructure/lexiguard-service-account-key.json
